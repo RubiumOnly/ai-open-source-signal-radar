@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import unittest
 
 from signal_radar.api import _live_report
+from signal_radar.api import create_app
 from signal_radar.models import RunRequest, SourceStatus
 from signal_radar.sources import SourceFetchResult
 
@@ -41,6 +42,13 @@ class _FakeRSS:
 
 
 class LiveOrchestrationTests(unittest.TestCase):
+    def test_fixture_endpoint_rejects_paths_outside_fixture_roots(self) -> None:
+        from fastapi.testclient import TestClient
+
+        client = TestClient(create_app())
+        response = client.get("/api/report", params={"fixture": "../.env"})
+        self.assertEqual(response.status_code, 400)
+
     def test_window_is_forwarded_to_github_and_rss_sources(self) -> None:
         github = _FakeGitHub()
         rss = _FakeRSS()

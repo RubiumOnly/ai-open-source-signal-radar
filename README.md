@@ -159,6 +159,8 @@ Invoke-RestMethod http://localhost:8000/api/run -Method Post -ContentType "appli
 } | ConvertTo-Json)
 ```
 
+动态页面记录会区分“可核验摘录”和“仅有标题/链接的元数据”。如果模型没有明确标记原文摘录或可见日期，系统会丢弃对应正文/时间并降低证据等级，不会把推断内容写进报告。
+
 也可以使用 CLI 触发动态来源。必须同时显式开启适配器和实时执行，并重复传入需要访问的 URL：
 
 ```powershell

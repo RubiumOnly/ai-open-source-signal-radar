@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import types
@@ -145,6 +146,19 @@ class SourceAdapterTests(unittest.TestCase):
         self.assertEqual(result.status.status, "blocked")
         self.assertEqual(result.status.error, "domain_not_allowed")
 
+    def test_browser_use_requires_allowlist_for_live_mode(self) -> None:
+        adapter = BrowserUseSourceAdapter(enabled=True, run_live=True, api_key="test")
+        result = adapter.collect(["https://example.com/post"])
+        self.assertEqual(result.status.status, "blocked")
+        self.assertEqual(result.status.error, None)
+        self.assertIn("allowlist", result.status.detail or "")
+
+    def test_browser_use_async_path_requires_allowlist_too(self) -> None:
+        adapter = BrowserUseSourceAdapter(enabled=True, run_live=True, api_key="test")
+        result = asyncio.run(adapter.async_collect(["https://example.com/post"]))
+        self.assertEqual(result.status.status, "blocked")
+        self.assertIn("allowlist", result.status.detail or "")
+
     def test_github_adapter_maps_public_release_and_issue(self) -> None:
         payloads = [
             [{"id": 1, "html_url": "https://github.com/org/repo/releases/tag/v1", "tag_name": "v1", "body": "Fixed timeout", "published_at": "2026-09-28T00:00:00Z"}],
@@ -160,6 +174,57 @@ class SourceAdapterTests(unittest.TestCase):
         self.assertEqual(len(result.articles), 2)
         self.assertEqual(len(result.evidence), 2)
         self.assertTrue(any(claim.sentiment == "negative" for claim in result.claims))
+
+    def test_github_since_is_sent_to_issues_and_filters_old_records(self) -> None:
+        payloads = [
+            [{"id": 1, "html_url": "https://github.com/org/repo/releases/tag/v1", "tag_name": "v1", "body": "new release", "published_at": "2026-09-29T00:00:00Z"}],
+            [
+                {"id": 2, "html_url": "https://github.com/org/repo/issues/2", "title": "new issue", "body": "works", "updated_at": "2026-09-29T00:00:00Z"},
+                {"id": 3, "html_url": "https://github.com/org/repo/issues/3", "title": "old issue", "body": "bug", "updated_at": "2026-01-01T00:00:00Z"},
+            ],
+        ]
+        urls = []
+
+        def opener(request, timeout):
+            urls.append(request.full_url)
+            return _Response(payloads.pop(0))
+
+        result = GitHubSourceAdapter(opener=opener).collect(
+            "org/repo",
+            limit=5,
+            since=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result.status.status, "ok")
+        self.assertEqual({article.title for article in result.articles}, {"v1", "new issue"})
+        self.assertIn("since=2026-09-01T00%3A00%3A00Z", urls[1])
+
+    def test_rss_rejects_credentials_and_private_hosts_without_opening(self) -> None:
+        calls = []
+
+        def opener(request, timeout):
+            calls.append(request.full_url)
+            return _Response(self.RSS_XML)
+
+        result = RSSSourceAdapter(opener=opener).collect(
+            ["https://user:secret@example.com/feed.xml", "http://127.0.0.1/feed.xml"]
+        )
+        self.assertEqual(result.status.status, "error")
+        self.assertIn("invalid_url", result.status.error or "")
+        self.assertNotIn("secret", result.status.error or "")
+        self.assertEqual(calls, [])
+
+    def test_rss_limits_number_of_feed_requests(self) -> None:
+        calls = []
+
+        def opener(request, timeout):
+            calls.append(request.full_url)
+            return _Response(self.RSS_XML)
+
+        result = RSSSourceAdapter(opener=opener, max_feeds=1).collect(
+            ["https://one.example/feed.xml", "https://two.example/feed.xml"]
+        )
+        self.assertEqual(result.status.status, "ok")
+        self.assertEqual(calls, ["https://one.example/feed.xml"])
 
     def test_browser_use_opt_in_maps_structured_history(self) -> None:
         class FakeHistory:
@@ -296,6 +361,20 @@ class SourceAdapterTests(unittest.TestCase):
             max_records=1,
         )
         self.assertEqual(len(result.articles), 1)
+
+    def test_browser_use_downgrades_unverified_excerpt_and_date(self) -> None:
+        adapter = BrowserUseSourceAdapter(allowed_domains=["github.com"])
+        record = BrowserRecord(
+            title="Issue title",
+            url="https://github.com/org/repo/issues/1",
+            excerpt="guessed body",
+            published_at="2026-09-29",
+        )
+        result = adapter._materialise([record], ["github.com"], max_records=1)
+        self.assertIsNone(result.articles[0].published_at)
+        self.assertIsNone(result.articles[0].excerpt)
+        self.assertEqual(result.evidence[0].evidence_level, "metadata_only")
+        self.assertEqual(result.evidence[0].quote, "")
 
 
 if __name__ == "__main__":

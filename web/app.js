@@ -49,6 +49,9 @@ function normalizeReport(payload) {
   report.summary = report.summary || {};
   report.trends = Array.isArray(report.trends) ? report.trends : [];
   report.topics = Array.isArray(report.topics) ? report.topics : [];
+  report.articles = Array.isArray(report.articles) ? report.articles : [];
+  report.claims = Array.isArray(report.claims) ? report.claims : [];
+  report.events = Array.isArray(report.events) ? report.events : [];
   report.evidence = Array.isArray(report.evidence) ? report.evidence : [];
   report.sources = Array.isArray(report.sources) ? report.sources : [];
   report.access_status = Array.isArray(report.access_status) ? report.access_status : [];
@@ -227,6 +230,96 @@ function renderEvidence(evidence) {
   });
 }
 
+function riskClass(value) {
+  const raw = String(value || "low").toLowerCase();
+  return ["low", "medium", "high", "critical"].includes(raw) ? raw : "low";
+}
+
+function eventEvidenceLinks(event, report) {
+  const evidenceById = new Map(report.evidence.map((item) => [item.id, item]));
+  const articleById = new Map(report.articles.map((item) => [item.id, item]));
+  const links = [];
+  const seen = new Set();
+  const add = (item, fallbackLabel) => {
+    const url = safeUrl(item?.url || item?.source_url || item?.link);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    links.push({ url, label: text(item.title || item.name, fallbackLabel) });
+  };
+  (event.evidence_ids || []).forEach((id) => add(evidenceById.get(id), "证据"));
+  (event.article_ids || []).forEach((id) => add(articleById.get(id), "原文"));
+  return links.slice(0, 3);
+}
+
+function renderEvents(events, report) {
+  const list = el("events-list");
+  list.replaceChildren();
+  const items = [...events].sort((a, b) => {
+    const riskDelta = number(b.risk_score, 0) - number(a.risk_score, 0);
+    if (riskDelta) return riskDelta;
+    return String(b.occurred_at || "").localeCompare(String(a.occurred_at || ""));
+  });
+  el("events-empty").hidden = items.length > 0;
+  el("events-note").textContent = `${events.length} 个事件，按风险分数排序`;
+  items.slice(0, 10).forEach((event) => {
+    const row = document.createElement("article");
+    row.className = `event-row event-row--${riskClass(event.risk_level)}`;
+
+    const identity = document.createElement("div");
+    identity.className = "event-identity";
+    const title = document.createElement("strong");
+    title.className = "event-title";
+    title.textContent = text(event.title, "未命名事件");
+    identity.append(title);
+    if (event.summary) {
+      const summary = document.createElement("p");
+      summary.className = "event-summary";
+      summary.textContent = text(event.summary);
+      identity.append(summary);
+    }
+
+    const category = document.createElement("span");
+    category.className = "event-category";
+    category.textContent = text(event.category, "反馈");
+
+    const level = document.createElement("span");
+    level.className = `event-level event-level--${riskClass(event.risk_level)}`;
+    level.textContent = riskLevelLabel(event.risk_level);
+
+    const score = document.createElement("span");
+    score.className = "event-score";
+    score.textContent = `${Math.round(Math.max(0, Math.min(100, number(event.risk_score, 0))))} / 100`;
+
+    const date = document.createElement("time");
+    date.className = "event-date";
+    date.dateTime = text(event.occurred_at, "");
+    date.textContent = dateLabel(event.occurred_at, { year: "numeric", month: "2-digit", day: "2-digit" });
+
+    const evidence = document.createElement("div");
+    evidence.className = "event-evidence";
+    const links = eventEvidenceLinks(event, report);
+    if (links.length) {
+      links.forEach((item, index) => {
+        const link = document.createElement("a");
+        link.href = item.url;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.textContent = `证据 ${index + 1}`;
+        link.title = item.label;
+        evidence.append(link);
+      });
+    } else {
+      const missing = document.createElement("span");
+      missing.className = "event-evidence--missing";
+      missing.textContent = "暂无链接";
+      evidence.append(missing);
+    }
+
+    row.append(identity, category, level, score, date, evidence);
+    list.append(row);
+  });
+}
+
 function statusPresentation(status) {
   const raw = String(status || "unknown").toLowerCase();
   const map = {
@@ -274,6 +367,7 @@ function renderReport(rawReport) {
   displaySummary(report);
   renderTrends(report.trends);
   renderTopics(report.topics);
+  renderEvents(report.events, report);
   renderEvidence(report.evidence);
   renderSources(report);
   return report;

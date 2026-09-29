@@ -39,9 +39,26 @@ except ImportError:  # pragma: no cover - 仅在最小运行环境中触发
 
 SERVICE_VERSION = "0.1.0"
 
+# Explicit fixture paths are useful for local replay, but must stay inside the
+# repository's fixture directories. Resolving before containment checks also
+# prevents a symlink from escaping the allowlist.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FIXTURE_ROOTS = (
+    PROJECT_ROOT / "fixtures",
+    Path(__file__).resolve().parent / "fixtures",
+)
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(value, maximum))
 
 
 def _run_id() -> str:
@@ -54,6 +71,28 @@ def _project_value(payload: RunRequest) -> str:
 
 def _copy_report_for_run(report: Report, run_id: str, *, window_days: int) -> Report:
     return report.model_copy(update={"run_id": run_id, "window_days": window_days})
+
+
+def _safe_fixture_path(repository: FixtureReportRepository, raw_path: str | Path) -> Path:
+    """校验回放 fixture，避免路径穿越、任意文件读取和 symlink 越界。"""
+
+    try:
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        candidate = candidate.resolve()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid fixture path") from exc
+    roots = [root.resolve() for root in FIXTURE_ROOTS]
+    configured = getattr(repository, "path", None)
+    if configured is not None:
+        roots.append(Path(configured).resolve().parent)
+    inside_root = any(candidate == root or root in candidate.parents for root in roots)
+    if candidate.suffix.lower() != ".json" or not inside_root:
+        raise HTTPException(status_code=400, detail="fixture must be a JSON file under an allowed fixture directory")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="fixture not found")
+    return candidate
 
 
 def _access_from_sources(statuses: list[SourceStatus]) -> list[AccessStatusRecord]:
@@ -78,7 +117,9 @@ def _live_report(
 ) -> tuple[Report, list[SourceStatus]]:
     repository = _project_value(payload)
     requested_sources = [payload.source] if payload.source else payload.sources
-    requested_sources = [str(item).lower().replace("-", "_") for item in requested_sources if item]
+    requested_sources = list(
+        dict.fromkeys(str(item).lower().replace("-", "_") for item in requested_sources if item)
+    )
     if not requested_sources:
         requested_sources = ["github"]
     if "all" in requested_sources:
@@ -169,7 +210,7 @@ def create_app(
             for item in os.getenv("SIGNAL_RADAR_BROWSER_ALLOWED_DOMAINS", "").split(",")
             if item.strip()
         ),
-        max_steps=int(os.getenv("SIGNAL_RADAR_BROWSER_MAX_STEPS", "12")),
+        max_steps=_env_int("SIGNAL_RADAR_BROWSER_MAX_STEPS", 12, 1, 40),
     )
     rss_adapter = rss_adapter or RSSSourceAdapter(
         feed_urls=tuple(
@@ -205,7 +246,7 @@ def create_app(
     @service.get("/api/report", response_model=Report)
     def report(fixture: str | None = Query(default=None)) -> Report:
         if fixture:
-            report_value = load_fixture_report(Path(fixture))
+            report_value = load_fixture_report(_safe_fixture_path(repository, fixture))
         else:
             report_value = service.state.latest_report or repository.get_report()
         return report_value
@@ -219,7 +260,11 @@ def create_app(
         run_id = _run_id()
         started = datetime.now(timezone.utc)
         if payload.mode == "replay":
-            report_value = load_fixture_report(Path(payload.fixture)) if payload.fixture else repository.get_report()
+            report_value = (
+                load_fixture_report(_safe_fixture_path(repository, payload.fixture))
+                if payload.fixture
+                else repository.get_report()
+            )
             report_value = _copy_report_for_run(report_value, run_id, window_days=payload.window_days)
             statuses = report_value.sources
             status_name = "completed"

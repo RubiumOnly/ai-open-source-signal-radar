@@ -40,6 +40,14 @@ def _env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
 def _browser_adapter(args: argparse.Namespace) -> BrowserUseSourceAdapter:
     domains = tuple(
         item.strip()
@@ -50,7 +58,7 @@ def _browser_adapter(args: argparse.Namespace) -> BrowserUseSourceAdapter:
         enabled=args.enable_browser_use or _env_flag("SIGNAL_RADAR_BROWSER_ENABLED"),
         run_live=args.browser_run_live or _env_flag("SIGNAL_RADAR_BROWSER_RUN_LIVE"),
         allowed_domains=domains,
-        max_steps=int(os.getenv("SIGNAL_RADAR_BROWSER_MAX_STEPS", "12")),
+        max_steps=_env_int("SIGNAL_RADAR_BROWSER_MAX_STEPS", 12, 1, 40),
     )
 
 

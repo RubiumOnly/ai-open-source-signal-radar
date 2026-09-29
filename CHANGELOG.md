@@ -6,6 +6,9 @@
 - 增加 CLI/API 的多来源编排、RSS feed 参数和窗口过滤；
 - 使用 browser-use 原生 `ChatDeepSeek` wrapper，保留 OpenAI-compatible fallback；
 - 锁定 FastAPI 与 Starlette 的兼容范围，并补充 Live 集成测试。
+- Dashboard 增加关键事件、风险信号和证据回链；
+- 收紧 fixture 路径、RSS 网络目标和 Browser Use 域名白名单边界；
+- 动态抽取对不可核验的日期和正文降级为 metadata-only。
 
 ## 0.1.0 - 2026-09-29
 

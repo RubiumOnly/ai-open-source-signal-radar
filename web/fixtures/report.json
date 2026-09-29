@@ -29,6 +29,28 @@
     { "name": "setup", "count": 1, "sentiment": "negative", "risk_score": 100 },
     { "name": "timeouts", "count": 1, "sentiment": "negative", "risk_score": 100 }
   ],
+  "events": [
+    {
+      "id": "event-timeout",
+      "title": "长任务出现超时重试",
+      "category": "reliability",
+      "summary": "多个用户反馈长任务中的会话超时与重试问题。",
+      "risk_level": "high",
+      "risk_score": 68,
+      "occurred_at": "2026-09-26T11:00:00Z",
+      "evidence_ids": ["ev-1024"]
+    },
+    {
+      "id": "event-release",
+      "title": "最新版本改善重试处理",
+      "category": "release",
+      "summary": "版本说明提到重试逻辑和浏览器会话钩子改进。",
+      "risk_level": "low",
+      "risk_score": 18,
+      "occurred_at": "2026-09-24T09:00:00Z",
+      "evidence_ids": ["ev-release"]
+    }
+  ],
   "evidence": [
     {
       "id": "ev-1024",
