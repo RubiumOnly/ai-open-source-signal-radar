@@ -1189,6 +1189,8 @@ class BrowserUseSourceAdapter:
     ) -> SourceFetchResult:
         """同步入口，供 FastAPI/CLI 使用；异步调用方可直接使用 ``async_collect``。"""
         values = [str(url).strip() for url in urls if str(url).strip()][: max(1, min(int(limit), 20))]
+        if self.enabled and self.run_live and not self.allowed_domains:
+            return self._skipped_result("allowlist_missing")
         if _event_is_set(cancel_event):
             return self._cancelled_result()
         if values and self.allowed_domains and not any(_is_allowed_url(url, self.allowed_domains) for url in values):
