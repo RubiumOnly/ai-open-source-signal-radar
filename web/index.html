@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="AI 开源项目社区反馈与版本风险雷达" />
+    <title>OpenPulse · 社区反馈与版本风险雷达</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup" aria-label="OpenPulse 项目反馈雷达">
+          <span class="brand-mark" aria-hidden="true">OP</span>
+          <span class="brand-name">OpenPulse</span>
+          <span class="brand-context">项目反馈雷达</span>
+        </div>
+        <div class="topbar-meta">
+          <span id="data-mode" class="status-chip status-chip--muted">正在连接数据源</span>
+          <span class="last-run">上次生成 <time id="generated-at">—</time></span>
+          <button class="icon-button" id="refresh-button" type="button" title="重新加载报告" aria-label="重新加载报告">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <main id="main-content" class="main-content">
+        <section class="project-strip" aria-labelledby="project-heading">
+          <div class="project-identity">
+            <div class="project-kicker">监测项目</div>
+            <div class="project-title-row">
+              <h1 id="project-heading">browser-use/browser-use</h1>
+              <span id="project-version" class="version-badge">版本 —</span>
+            </div>
+            <p id="project-description" class="project-description">加载项目说明中…</p>
+            <a id="project-repository" class="repo-link" href="https://github.com/browser-use/browser-use" target="_blank" rel="noreferrer">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4.2 1.4-4.2-2.1-5.9-2.8M14.9 21v-3.9a3.4 3.4 0 0 0-.9-2.6c3 0 6.1-1.5 6.1-6.5a5 5 0 0 0-1.3-3.5 4.6 4.6 0 0 0-.1-3.5s-1.1-.3-3.6 1.3a12.4 12.4 0 0 0-6.5 0C6.1.7 5 1 5 1a4.6 4.6 0 0 0-.1 3.5 5 5 0 0 0-1.3 3.5c0 5 3.1 6.5 6.1 6.5a3.4 3.4 0 0 0-.9 2.6V21" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              查看仓库
+              <svg class="external-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </a>
+          </div>
+          <dl class="project-meta">
+            <div><dt>最近发布</dt><dd id="last-release">—</dd></div>
+            <div><dt>分析窗口</dt><dd><span id="window-days">—</span> 天</dd></div>
+            <div><dt>运行编号</dt><dd id="run-id">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="control-band" aria-labelledby="controls-heading">
+          <div class="section-label">
+            <span class="section-index">01</span>
+            <h2 id="controls-heading">运行配置</h2>
+          </div>
+          <form id="run-form" class="run-controls">
+            <label class="field field--project">
+              <span>仓库或项目</span>
+              <input id="project-input" name="project" type="text" value="browser-use/browser-use" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>时间窗口</span>
+              <select id="window-input" name="window_days">
+                <option value="7">最近 7 天</option>
+                <option value="14">最近 14 天</option>
+                <option value="30" selected>最近 30 天</option>
+                <option value="90">最近 90 天</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>来源范围</span>
+              <select id="source-input" name="source">
+                <option value="all" selected>全部可用来源</option>
+                <option value="github">GitHub 社区</option>
+                <option value="official">官方页面</option>
+                <option value="media">技术媒体</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>运行模式</span>
+              <select id="mode-input" name="mode">
+                <option value="replay" selected>回放演示</option>
+                <option value="live">实时采集</option>
+              </select>
+            </label>
+            <button id="run-button" class="primary-button" type="submit">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5v15l14-7.5L5 4.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+              <span>运行分析</span>
+            </button>
+          </form>
+          <div id="error-banner" class="inline-alert" role="status" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5M12 16.5v.1M10.2 3.3 2.5 17a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.8 3.3a2 2 0 0 0-3.6 0Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span id="error-message"></span>
+          </div>
+        </section>
+
+        <section class="overview-section" aria-labelledby="overview-heading">
+          <div class="section-heading-row">
+            <div class="section-label">
+              <span class="section-index">02</span>
+              <h2 id="overview-heading">风险总览</h2>
+            </div>
+            <span class="section-note">按来源证据计算，不代表全网观点</span>
+          </div>
+          <div class="overview-grid">
+            <article class="risk-tile risk-tile--primary">
+              <div class="tile-caption">综合风险指数</div>
+              <div class="risk-score-row">
+                <strong id="risk-score" class="risk-score">—</strong><span class="score-unit">/ 100</span>
+              </div>
+              <div class="risk-track" aria-hidden="true"><span id="risk-track-fill"></span></div>
+              <div class="risk-foot"><span id="risk-level" class="risk-level">等待数据</span><span>可解释评分</span></div>
+            </article>
+            <article class="metric-tile">
+              <div class="tile-caption">关键事件</div>
+              <strong id="events-count" class="metric-value">—</strong>
+              <p>已聚合的版本、故障与争议</p>
+            </article>
+            <article class="metric-tile">
+              <div class="tile-caption">来源覆盖</div>
+              <strong id="source-count" class="metric-value">—</strong>
+              <p><span id="coverage-percent">—</span> 的计划来源可访问</p>
+            </article>
+            <article class="metric-tile metric-tile--status">
+              <div class="tile-caption">采集状态</div>
+              <strong id="access-summary" class="metric-status">—</strong>
+              <p id="access-detail">等待来源检查</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="analysis-grid" aria-label="趋势与主题分析">
+          <article class="trend-panel panel-line" aria-labelledby="trend-heading">
+            <div class="panel-heading">
+              <div>
+                <div class="section-index">03</div>
+                <h2 id="trend-heading">风险趋势</h2>
+              </div>
+              <span id="trend-range" class="panel-meta">—</span>
+            </div>
+            <div class="trend-chart-wrap">
+              <svg id="trend-chart" class="trend-chart" viewBox="0 0 720 230" role="img" aria-label="风险指数趋势图"></svg>
+              <div id="trend-empty" class="empty-state" hidden>暂无足够的时间序列数据</div>
+            </div>
+            <div id="trend-labels" class="chart-labels" aria-hidden="true"></div>
+          </article>
+
+          <article class="topics-panel panel-line" aria-labelledby="topics-heading">
+            <div class="panel-heading">
+              <div>
+                <div class="section-index">04</div>
+                <h2 id="topics-heading">讨论主题</h2>
+              </div>
+              <span class="panel-meta">按提及量</span>
+            </div>
+            <div id="topics-list" class="topics-list"></div>
+            <div id="topics-empty" class="empty-state" hidden>暂无主题聚类</div>
+          </article>
+        </section>
+
+        <section class="evidence-section" aria-labelledby="evidence-heading">
+          <div class="section-heading-row">
+            <div class="section-label">
+              <span class="section-index">05</span>
+              <h2 id="evidence-heading">证据摘录</h2>
+            </div>
+            <span id="evidence-count" class="section-note">— 条可引用证据</span>
+          </div>
+          <div id="evidence-list" class="evidence-list"></div>
+          <div id="evidence-empty" class="empty-state" hidden>当前窗口没有可展示的证据</div>
+        </section>
+
+        <section class="sources-section" aria-labelledby="sources-heading">
+          <div class="section-heading-row">
+            <div class="section-label">
+              <span class="section-index">06</span>
+              <h2 id="sources-heading">来源覆盖与访问状态</h2>
+            </div>
+            <span class="section-note">访问权限由来源逐项记录</span>
+          </div>
+          <div class="source-table-wrap">
+            <table class="source-table">
+              <thead>
+                <tr><th scope="col">来源</th><th scope="col">类型</th><th scope="col">访问状态</th><th scope="col">证据量</th><th scope="col">备注</th></tr>
+              </thead>
+              <tbody id="sources-body"></tbody>
+            </table>
+          </div>
+          <div id="sources-empty" class="empty-state" hidden>暂无来源状态</div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <span>证据优先 · 只读采集 · 登录来源需人工授权</span>
+        <span id="footer-updated">报告尚未加载</span>
+      </footer>
+    </div>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

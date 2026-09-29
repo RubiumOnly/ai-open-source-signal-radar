@@ -1,0 +1,13 @@
+services:
+  signal-radar:
+    build: .
+    env_file:
+      - .env
+    environment:
+      SIGNAL_RADAR_MODE: replay
+    ports:
+      - "8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "signal-radar"
+version = "0.1.0"
+description = "面向 AI 开源项目的证据驱动社区反馈与版本风险 Agent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Signal Radar contributors" }]
+dependencies = [
+  "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9",
+]
+live = [
+  "browser-use>=0.13,<0.14",
+  "httpx>=0.27,<1",
+  "python-dotenv>=1.0,<2",
+]
+api = [
+  "fastapi>=0.110,<1",
+  "uvicorn[standard]>=0.29,<1",
+  "python-dotenv>=1.0,<2",
+]
+
+[project.scripts]
+signal-radar = "signal_radar.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["signal_radar*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+

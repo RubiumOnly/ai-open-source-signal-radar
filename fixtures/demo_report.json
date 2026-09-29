@@ -1,0 +1,213 @@
+{
+  "run_id": "replay-2026-09-29-browser-use",
+  "project": {
+    "name": "browser-use",
+    "repository": "browser-use/browser-use",
+    "description": "让大语言模型通过浏览器完成可审计的网页任务",
+    "version": "0.7.9",
+    "last_release_at": "2026-09-25T09:30:00Z"
+  },
+  "generated_at": "2026-09-29T08:00:00Z",
+  "window_days": 30,
+  "summary": {
+    "risk_score": 62,
+    "risk_level": "high",
+    "events_count": 8,
+    "source_count": 4,
+    "coverage_pct": 78.0
+  },
+  "trends": [
+    {
+      "date": "2026-09-25",
+      "label": "版本发布",
+      "value": 3,
+      "mentions": 3,
+      "positive": 1,
+      "negative": 1,
+      "neutral": 1,
+      "risk_score": 48,
+      "description": "新版本集中修复浏览器会话超时和结构化输出问题"
+    },
+    {
+      "date": "2026-09-27",
+      "label": "兼容性反馈",
+      "value": 5,
+      "mentions": 5,
+      "positive": 1,
+      "negative": 3,
+      "neutral": 1,
+      "risk_score": 67,
+      "description": "关于 Chromium 版本与代理配置的讨论增加"
+    }
+  ],
+  "topics": [
+    {
+      "name": "浏览器会话稳定性",
+      "category": "reliability",
+      "mention_count": 9,
+      "count": 9,
+      "sentiment": "mixed",
+      "stance": "mixed",
+      "risk_level": "medium",
+      "risk_score": 64,
+      "sample_claims": ["claim:timeout-after-navigation"],
+      "summary": "部分用户报告长任务中出现页面加载超时，但维护者已合并重试改进。"
+    },
+    {
+      "name": "结构化输出",
+      "category": "developer_experience",
+      "mention_count": 6,
+      "count": 6,
+      "sentiment": "positive",
+      "stance": "supportive",
+      "risk_level": "low",
+      "risk_score": 22,
+      "sample_claims": ["claim:typed-output"],
+      "summary": "开发者认可 output_model_schema 降低了下游解析成本。"
+    },
+    {
+      "name": "部署与成本",
+      "category": "operations",
+      "mention_count": 4,
+      "count": 4,
+      "sentiment": "mixed",
+      "stance": "mixed",
+      "risk_level": "medium",
+      "risk_score": 56,
+      "sample_claims": ["claim:deployment-cost"],
+      "summary": "自托管浏览器需要额外资源，部分用户希望有更明确的成本控制示例。"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "ev-001",
+      "url": "https://github.com/browser-use/browser-use/releases/tag/0.7.9",
+      "title": "browser-use 0.7.9 Release",
+      "source": "github",
+      "published_at": "2026-09-25T09:30:00Z",
+      "retrieved_at": "2026-09-29T07:42:11Z",
+      "quote": "Improve browser session retry behavior and structured output examples.",
+      "content_hash": "sha256:demo-release-079",
+      "confidence": 0.99,
+      "evidence_level": "full_text",
+      "supports": ["topic:browser-session", "event:release-079"]
+    },
+    {
+      "id": "ev-002",
+      "url": "https://github.com/browser-use/browser-use/issues/1842",
+      "title": "Timeout after long-running navigation",
+      "source": "github",
+      "published_at": "2026-09-27T12:14:00Z",
+      "retrieved_at": "2026-09-29T07:42:13Z",
+      "quote": "The agent succeeds on short tasks but times out after several navigations.",
+      "content_hash": "sha256:demo-issue-1842",
+      "confidence": 0.91,
+      "evidence_level": "full_text",
+      "supports": ["topic:browser-session", "risk:reliability"]
+    },
+    {
+      "id": "ev-003",
+      "url": "https://github.com/browser-use/browser-use/discussions/633",
+      "title": "Using output_model_schema in production",
+      "source": "github",
+      "published_at": "2026-09-26T16:02:00Z",
+      "retrieved_at": "2026-09-29T07:42:15Z",
+      "quote": "Typed output makes it much easier to validate the result before sending it downstream.",
+      "content_hash": "sha256:demo-discussion-633",
+      "confidence": 0.88,
+      "evidence_level": "full_text",
+      "supports": ["topic:structured-output"]
+    },
+    {
+      "id": "ev-004",
+      "url": "https://browser-use.com/posts/reliable-agents",
+      "title": "Building reliable browser agents",
+      "source": "official_blog",
+      "published_at": "2026-09-24T10:00:00Z",
+      "retrieved_at": "2026-09-29T07:42:18Z",
+      "quote": "Set explicit step limits, domain allowlists, and recovery paths for production runs.",
+      "content_hash": "sha256:demo-blog-reliable",
+      "confidence": 0.84,
+      "evidence_level": "full_text",
+      "supports": ["risk:operations", "practice:guardrails"]
+    }
+  ],
+  "sources": [
+    {
+      "name": "GitHub Releases",
+      "source": "github_releases",
+      "kind": "first_party",
+      "source_type": "first_party",
+      "url": "https://github.com/browser-use/browser-use/releases",
+      "status": "ok",
+      "access_status": "public",
+      "items_seen": 3,
+      "items_used": 2,
+      "records": 2
+    },
+    {
+      "name": "GitHub Issues",
+      "source": "github_issues",
+      "kind": "developer_feedback",
+      "source_type": "developer_feedback",
+      "url": "https://github.com/browser-use/browser-use/issues",
+      "status": "ok",
+      "access_status": "public",
+      "items_seen": 18,
+      "items_used": 7,
+      "records": 7
+    },
+    {
+      "name": "GitHub Discussions",
+      "source": "github_discussions",
+      "kind": "developer_feedback",
+      "source_type": "developer_feedback",
+      "url": "https://github.com/browser-use/browser-use/discussions",
+      "status": "ok",
+      "access_status": "ok",
+      "detail": "公开动态页面，使用 browser-use 只读浏览。",
+      "items_seen": 9,
+      "items_used": 3,
+      "records": 3
+    },
+    {
+      "name": "Official blog",
+      "source": "official_blog",
+      "kind": "first_party",
+      "source_type": "first_party",
+      "url": "https://browser-use.com/blog",
+      "status": "ok",
+      "access_status": "public",
+      "items_seen": 4,
+      "items_used": 1,
+      "records": 1
+    }
+  ],
+  "access_status": [
+    {
+      "source": "github",
+      "status": "public",
+      "evidence_level": "full_text",
+      "reason": "公开页面/API，无需登录。",
+      "message": "通过公开页面/API 读取，未使用登录会话。"
+    },
+    {
+      "source": "csdn",
+      "status": "auth_required",
+      "evidence_level": "none",
+      "reason": "正文需要用户登录；Replay 不复用登录态。",
+      "message": "本次 Replay 未访问 CSDN；正文需要用户登录，因此不纳入结论。"
+    }
+  ],
+  "articles": [],
+  "claims": [],
+  "events": [
+    {
+      "id": "event:release-079",
+      "type": "release",
+      "title": "0.7.9 发布",
+      "date": "2026-09-25",
+      "evidence_ids": ["ev-001"]
+    }
+  ]
+}
