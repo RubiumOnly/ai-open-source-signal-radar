@@ -6,6 +6,7 @@ Signal Radar 会访问公开网页和第三方模型接口。请把它运行在�
 
 - 不要在 Issue、Pull Request、日志、fixture 或网页前端中写入模型 Key、GitHub Token、Cookie 或密码；
 - 使用本地 `.env`、系统环境变量或受控的密钥管理服务；
+- 根据运行环境显式设置 `ANONYMIZED_TELEMETRY=false`，避免把本地运行元数据发送到第三方遥测服务；
 - 如果凭据曾经出现在聊天、日志或提交中，应立即撤销并重新生成；
 - `.env`、浏览器 Profile 和本地工作笔记默认不属于仓库内容。
 

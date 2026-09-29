@@ -14,7 +14,20 @@ from .models import (
     RunRequest,
     SourceStatus,
 )
-from .sources import BrowserExtraction, BrowserRecord, BrowserUseSourceAdapter, GitHubSourceAdapter, SourceFetchResult
+from .sources import (
+    BrowserExtraction,
+    BrowserRecord,
+    BrowserUseSourceAdapter,
+    AtomSourceAdapter,
+    FeedSourceAdapter,
+    GitHubSourceAdapter,
+    OfficialBlogAdapter,
+    OfficialBlogSourceAdapter,
+    RssSourceAdapter,
+    RSSAdapter,
+    RSSSourceAdapter,
+    SourceFetchResult,
+)
 
 __all__ = [
     "AccessStatusRecord",
@@ -29,6 +42,13 @@ __all__ = [
     "SourceStatus",
     "BrowserUseSourceAdapter",
     "GitHubSourceAdapter",
+    "FeedSourceAdapter",
+    "RssSourceAdapter",
+    "RSSAdapter",
+    "AtomSourceAdapter",
+    "OfficialBlogAdapter",
+    "RSSSourceAdapter",
+    "OfficialBlogSourceAdapter",
     "SourceFetchResult",
     "BrowserExtraction",
     "BrowserRecord",

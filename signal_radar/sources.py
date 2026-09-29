@@ -8,17 +8,19 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
+import html
 import inspect
 import json
 import os
 import re
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, Field
@@ -38,6 +40,30 @@ class SourceFetchResult:
     claims: list[Claim] = field(default_factory=list)
     events: list[Event] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
+
+
+@dataclass
+class _FeedEntry:
+    """规范化后的 RSS/Atom 条目；只在适配器内部使用。"""
+
+    title: str
+    url: str
+    summary: str
+    content: str
+    author: str | None
+    published_at: datetime | None
+    identifier: str | None = None
+
+
+@dataclass
+class _FeedFetch:
+    """单个 feed 的读取结果，用于在聚合状态中保留失败原因。"""
+
+    entries: list[_FeedEntry] = field(default_factory=list)
+    title: str = ""
+    format: str = "rss"
+    error: str | None = None
+    status_code: int | None = None
 
 
 class BrowserRecord(BaseModel):
@@ -355,6 +381,377 @@ class GitHubSourceAdapter:
         return article, evidence, claim, event
 
 
+def _xml_local_name(tag: Any) -> str:
+    """返回 XML 标签的本地名称，兼容 RSS/Atom 的命名空间。"""
+
+    value = str(tag or "")
+    return value.rsplit("}", 1)[-1].lower()
+
+
+def _element_text(element: ET.Element | None) -> str:
+    """提取元素文本并去掉 HTML 标记，避免把页面标记当作证据。"""
+
+    if element is None:
+        return ""
+    raw = " ".join(part.strip() for part in element.itertext() if part and part.strip())
+    raw = html.unescape(raw)
+    return re.sub(r"<[^>]+>", " ", raw)
+
+
+def _child_element(element: ET.Element, names: Iterable[str]) -> ET.Element | None:
+    children = list(element)
+    # 按调用方给出的顺序选择语义更优的字段，例如优先完整正文而不是 RSS 摘要。
+    for name in names:
+        wanted = str(name).lower()
+        for child in children:
+            if _xml_local_name(child.tag) == wanted:
+                return child
+    return None
+
+
+def _child_text(element: ET.Element, names: Iterable[str]) -> str:
+    return _element_text(_child_element(element, names))
+
+
+def _atom_link(element: ET.Element) -> str:
+    """选择 Atom alternate 链接，同时兼容没有 href 的非标准 feed。"""
+
+    candidates: list[tuple[str, str]] = []
+    for child in list(element):
+        if _xml_local_name(child.tag) != "link":
+            continue
+        href = str(child.attrib.get("href") or _element_text(child)).strip()
+        if not href:
+            continue
+        candidates.append((str(child.attrib.get("rel") or "alternate").lower(), href))
+    for rel, href in candidates:
+        if rel in {"alternate", ""}:
+            return href
+    return candidates[0][1] if candidates else ""
+
+
+def _parse_feed_document(payload: bytes, feed_url: str) -> _FeedFetch:
+    """解析 RSS 2.0、Atom 1.x 以及常见的带命名空间变体。"""
+
+    try:
+        root = ET.fromstring(payload)
+    except (ET.ParseError, ValueError, UnicodeError) as exc:
+        return _FeedFetch(error=f"invalid_xml: {str(exc)[:180]}")
+
+    root_name = _xml_local_name(root.tag)
+    if root_name in {"rss", "rdf"}:
+        channel = _child_element(root, ("channel",))
+        if channel is None:
+            channel = root
+        feed_title = _child_text(channel, ("title",))
+        items_parent = root if root_name == "rdf" else channel
+        items = [child for child in list(items_parent) if _xml_local_name(child.tag) == "item"]
+        feed_format = "rss"
+    elif root_name == "feed":
+        channel = root
+        feed_title = _child_text(channel, ("title",))
+        items = [child for child in list(channel) if _xml_local_name(child.tag) == "entry"]
+        feed_format = "atom"
+    else:
+        return _FeedFetch(error=f"unsupported_feed_root: {root_name or 'empty'}")
+
+    entries: list[_FeedEntry] = []
+    for item in items:
+        title = _child_text(item, ("title",)) or "Untitled feed entry"
+        if feed_format == "atom":
+            url = _atom_link(item)
+            summary = _child_text(item, ("summary", "description"))
+            content = _child_text(item, ("content", "encoded", "description")) or summary
+            author_node = _child_element(item, ("author", "creator"))
+            author = _child_text(author_node, ("name",)) if author_node is not None else ""
+            date_value = _child_text(item, ("published", "updated", "created", "date"))
+            identifier = _child_text(item, ("id", "guid")) or None
+        else:
+            url = _child_text(item, ("link",))
+            summary = _child_text(item, ("description", "summary"))
+            content = _child_text(item, ("encoded", "content", "description")) or summary
+            author = _child_text(item, ("creator", "author"))
+            date_value = _child_text(item, ("pubdate", "published", "updated", "date", "created"))
+            identifier = _child_text(item, ("guid", "id")) or None
+        published = _parse_time(date_value)
+        # 条目没有链接时仍可使用，但应引用 feed URL，而不是凭空拼接本地地址。
+        entry_url = urljoin(feed_url, url) if url else feed_url
+        entries.append(
+            _FeedEntry(
+                title=title.strip(),
+                url=entry_url.strip(),
+                summary=summary.strip(),
+                content=content.strip(),
+                author=author.strip() or None,
+                published_at=published,
+                identifier=identifier.strip() if identifier else None,
+            )
+        )
+    return _FeedFetch(entries=entries, title=feed_title.strip(), format=feed_format)
+
+
+def _feed_http_status(status_code: int | None) -> str | None:
+    if status_code == 401:
+        return "auth_required"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code in {403}:
+        return "blocked"
+    if status_code is not None and status_code >= 400:
+        return "error"
+    return None
+
+
+class RSSSourceAdapter:
+    """读取公开 RSS/Atom feed，并映射到统一研究记录。
+
+    该适配器只使用 Python 标准库的 ``urllib`` 和 ``ElementTree``，适合
+    官方博客、产品更新日志等稳定来源。它不会读取模型密钥，也不会尝试
+    登录、绕过付费墙或执行 feed 内容中的指令。
+    """
+
+    def __init__(
+        self,
+        feeds: Iterable[str] | str | None = None,
+        *,
+        feed_urls: Iterable[str] | str | None = None,
+        timeout: float = 8.0,
+        max_limit: int = 50,
+        max_bytes: int = 2_000_000,
+        opener: JsonOpener | None = None,
+    ) -> None:
+        configured = feed_urls if feed_urls is not None else feeds
+        if isinstance(configured, str):
+            configured = (configured,)
+        self.feed_urls = tuple(str(url).strip() for url in (configured or ()) if str(url).strip())
+        self.timeout = max(0.5, float(timeout))
+        self.max_limit = max(1, min(int(max_limit), 200))
+        self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
+        self._opener = opener or urlopen
+
+    @staticmethod
+    def _valid_url(url: str) -> bool:
+        parsed = urlparse(url)
+        return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+
+    def _fetch(self, feed_url: str) -> _FeedFetch:
+        if not self._valid_url(feed_url):
+            return _FeedFetch(error="invalid_url")
+        request = Request(
+            feed_url,
+            headers={
+                "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
+                "User-Agent": "signal-radar/0.1 (+https://github.com/RubiumOnly/ai-open-source-signal-radar)",
+            },
+        )
+        try:
+            with self._opener(request, timeout=self.timeout) as response:
+                getcode = getattr(response, "getcode", None)
+                status_code = getattr(response, "status", None) or (getcode() if callable(getcode) else None)
+                try:
+                    raw = response.read(self.max_bytes + 1)
+                except TypeError:
+                    # 简单的离线 mock 常见地只实现 ``read()``。
+                    raw = response.read()
+            status_name = _feed_http_status(status_code)
+            if status_name:
+                return _FeedFetch(status_code=status_code, error=f"http_{status_code}")
+            if not isinstance(raw, (bytes, bytearray)):
+                raw = str(raw).encode("utf-8", errors="replace")
+            if len(raw) > self.max_bytes:
+                return _FeedFetch(status_code=status_code, error="response_too_large")
+            parsed = _parse_feed_document(bytes(raw), feed_url)
+            parsed.status_code = status_code
+            return parsed
+        except HTTPError as exc:
+            return _FeedFetch(status_code=exc.code, error=_error_detail(exc))
+        except (URLError, TimeoutError, OSError, ValueError, AttributeError) as exc:
+            return _FeedFetch(error=str(exc)[:240] or exc.__class__.__name__)
+
+    def collect(
+        self,
+        feeds: Iterable[str] | str | None = None,
+        *,
+        urls: Iterable[str] | str | None = None,
+        feed_urls: Iterable[str] | str | None = None,
+        feed_url: str | None = None,
+        limit: int = 20,
+        since: datetime | None = None,
+    ) -> SourceFetchResult:
+        """读取 feed，按时间过滤并返回有证据链的结构化记录。"""
+
+        configured = urls if urls is not None else feed_urls if feed_urls is not None else feed_url
+        if configured is None:
+            configured = feeds
+        if configured is None:
+            configured = self.feed_urls
+        if isinstance(configured, str):
+            configured = (configured,)
+        feed_urls = list(dict.fromkeys(str(url).strip() for url in (configured or ()) if str(url).strip()))
+        if not feed_urls:
+            return SourceFetchResult(
+                status=SourceStatus(
+                    source="Official RSS/Atom",
+                    source_type="first_party",
+                    status="error",
+                    access_status="error",
+                    detail="No RSS or Atom feed URLs were supplied",
+                    error="no_feeds",
+                )
+            )
+        bounded_limit = max(1, min(int(limit), self.max_limit))
+        if isinstance(since, str):
+            since = _parse_time(since)
+        if since and since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+
+        started = time.perf_counter()
+        fetched: list[tuple[str, _FeedFetch]] = [(url, self._fetch(url)) for url in feed_urls]
+        failures: list[str] = []
+        successes = 0
+        all_entries: list[tuple[str, _FeedFetch, _FeedEntry]] = []
+        for feed_url, result in fetched:
+            if result.error:
+                failures.append(f"{feed_url}: {result.error}")
+                continue
+            successes += 1
+            for entry in result.entries:
+                if since and entry.published_at and entry.published_at < since:
+                    continue
+                all_entries.append((feed_url, result, entry))
+
+        # 同一官方博客的多个 feed 版本可能重复返回链接，保留首个证据后再应用总条数上限。
+        seen: set[str] = set()
+        articles: list[Article] = []
+        evidence: list[Evidence] = []
+        claims: list[Claim] = []
+        events: list[Event] = []
+        for feed_url, feed, entry in all_entries:
+            body = (entry.content or entry.summary or entry.title).strip()
+            entry_key = (
+                entry.url
+                if entry.url and entry.url != feed_url
+                else entry.identifier or f"{entry.title}\n{body}"
+            )
+            dedupe_key = entry_key
+            dedupe_key = dedupe_key.strip().lower()
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            article_id = f"feed-{_hash_text(feed_url + '|' + entry_key)}"
+            source = feed.title or urlparse(feed_url).netloc or "Official blog"
+            article = Article(
+                id=article_id,
+                url=entry.url or feed_url,
+                title=entry.title or "Official update",
+                source=source,
+                source_type="first_party",
+                author=entry.author,
+                excerpt=body[:500] or None,
+                content=body or None,
+                published_at=entry.published_at,
+                access_status="public",
+                content_hash=_hash_text(body),
+                tags=["official", "feed"],
+                metadata={"collector": "rss", "feed_url": feed_url, "format": feed.format},
+            )
+            stance, sentiment, category = _classify_feedback(f"{entry.title}\n{body}")
+            # 官方公告通常是中性信息，只有标题或正文明确提到故障/修复时才提高风险。
+            risk_score = 64.0 if sentiment == "negative" else 18.0 if sentiment == "positive" else 12.0
+            evidence_id = f"ev-{article_id.removeprefix('feed-')}"
+            claim_id = f"claim-{article_id.removeprefix('feed-')}"
+            event_id = f"event-{article_id.removeprefix('feed-')}"
+            evidence_level = "full_text" if entry.content else "excerpt"
+            evidence.append(
+                Evidence(
+                    id=evidence_id,
+                    article_id=article_id,
+                    url=article.url,
+                    source=source,
+                    title=article.title,
+                    quote=body[:600] or article.title,
+                    evidence_level=evidence_level,
+                    confidence=0.86 if entry.content else 0.72,
+                    published_at=entry.published_at,
+                    content_hash=article.content_hash,
+                )
+            )
+            claims.append(
+                Claim(
+                    id=claim_id,
+                    text=body[:280].replace("\n", " ") or article.title,
+                    claim_type="official_update" if category == "feedback" else category,
+                    stance=stance,  # type: ignore[arg-type]
+                    sentiment=sentiment,  # type: ignore[arg-type]
+                    confidence=evidence[-1].confidence,
+                    evidence_ids=[evidence_id],
+                    article_ids=[article_id],
+                    topics=["official update"],
+                )
+            )
+            events.append(
+                Event(
+                    id=event_id,
+                    title=article.title,
+                    category="official_update",
+                    summary=article.excerpt,
+                    risk_level="high" if risk_score >= 60 else "medium" if risk_score >= 30 else "low",
+                    risk_score=risk_score,
+                    sentiment=sentiment,  # type: ignore[arg-type]
+                    occurred_at=entry.published_at,
+                    article_ids=[article_id],
+                    claim_ids=[claim_id],
+                    evidence_ids=[evidence_id],
+                )
+            )
+            articles.append(article)
+            if len(articles) >= bounded_limit:
+                break
+
+        status_name = "ok"
+        access_name = "public"
+        if failures and successes:
+            status_name = "partial"
+        elif failures and not successes:
+            statuses = {_feed_http_status(result.status_code) for _, result in fetched}
+            if "auth_required" in statuses:
+                status_name, access_name = "auth_required", "auth_required"
+            elif "rate_limited" in statuses:
+                status_name, access_name = "rate_limited", "rate_limited"
+            elif "blocked" in statuses:
+                status_name, access_name = "blocked", "blocked"
+            else:
+                status_name, access_name = "error", "error"
+        detail = f"{len(articles)} records from {len(feed_urls)} RSS/Atom feed(s)"
+        if failures:
+            detail += "; " + "; ".join(failures)[:360]
+        return SourceFetchResult(
+            status=SourceStatus(
+                source="Official RSS/Atom",
+                source_type="first_party",
+                status=status_name,  # type: ignore[arg-type]
+                access_status=access_name,  # type: ignore[arg-type]
+                records=len(articles),
+                detail=detail,
+                error="; ".join(failures)[:500] if failures else None,
+                latency_ms=_latency(started),
+                authenticated=False,
+            ),
+            articles=articles,
+            claims=claims,
+            events=events,
+            evidence=evidence,
+        )
+
+    fetch = collect
+
+
+class OfficialBlogSourceAdapter(RSSSourceAdapter):
+    """语义化别名：官方博客通常通过 RSS/Atom 暴露文章。"""
+
+    pass
+
+
 def _latency(started: float) -> float:
     return round((time.perf_counter() - started) * 1000.0, 1)
 
@@ -512,7 +909,8 @@ class BrowserUseSourceAdapter:
 
     async def async_collect(self, urls: Iterable[str] = (), *, limit: int = 10, **_: Any) -> SourceFetchResult:
         """执行一次有界的只读 Browser Use 采集。"""
-        values = [str(url).strip() for url in urls if str(url).strip()][: max(1, min(int(limit), 20))]
+        bounded_limit = max(1, min(int(limit), 20))
+        values = [str(url).strip() for url in urls if str(url).strip()][:bounded_limit]
         if not values:
             return SourceFetchResult(
                 status=SourceStatus(
@@ -566,7 +964,7 @@ class BrowserUseSourceAdapter:
             history = await agent.run(max_steps=self.max_steps)
             extraction = self._parse_history(history)
             permitted_domains = self.allowed_domains or tuple(urlparse(url).hostname or "" for url in values)
-            result = self._materialise(extraction.records, permitted_domains)
+            result = self._materialise(extraction.records, permitted_domains, max_records=bounded_limit)
             detail = f"{len(result.articles)} records from {len(values)} dynamic pages"
             if invalid:
                 detail += f"; skipped {len(invalid)} URL(s)"
@@ -603,6 +1001,34 @@ class BrowserUseSourceAdapter:
                     return chat_browser_use(model=self.model, api_key=self.browser_api_key)
                 except TypeError:
                     return chat_browser_use(model=self.model)
+
+        # browser-use 0.13.x ships a dedicated DeepSeek wrapper.  Prefer it
+        # over the generic OpenAI-compatible wrapper: DeepSeek's structured
+        # output contract is implemented with tool calls, while the generic
+        # wrapper requests OpenAI's ``json_schema`` response format (which
+        # DeepSeek does not consistently expose on all models/endpoints).
+        if self.provider in {"deepseek", "deepseek-ai"}:
+            if not self.deepseek_api_key:
+                raise RuntimeError("DEEPSEEK_API_KEY is required for the deepseek provider")
+            chat_deepseek = getattr(browser_use, "ChatDeepSeek", None)
+            if chat_deepseek is None:
+                try:
+                    from browser_use.llm import ChatDeepSeek as chat_deepseek
+                except ImportError:
+                    chat_deepseek = None
+            if chat_deepseek is not None:
+                try:
+                    return chat_deepseek(
+                        model=self.model,
+                        api_key=self.deepseek_api_key,
+                        base_url=self.base_url,
+                    )
+                except TypeError:
+                    # Keep the generic OpenAI-compatible path as a fallback
+                    # for older/newer browser-use wrappers with a different
+                    # constructor signature.
+                    pass
+
         chat_openai = getattr(browser_use, "ChatOpenAI", None)
         if chat_openai is None:
             try:
@@ -611,8 +1037,6 @@ class BrowserUseSourceAdapter:
                 raise RuntimeError("browser-use has no compatible ChatOpenAI wrapper") from exc
         kwargs: dict[str, Any] = {"model": self.model}
         if self.provider in {"deepseek", "deepseek-ai"}:
-            if not self.deepseek_api_key:
-                raise RuntimeError("DEEPSEEK_API_KEY is required for the deepseek provider")
             kwargs.update({"api_key": self.deepseek_api_key, "base_url": self.base_url})
         elif self.openai_api_key:
             kwargs["api_key"] = self.openai_api_key
@@ -673,7 +1097,13 @@ class BrowserUseSourceAdapter:
             cleaned = cleaned[4:].lstrip()
         return BrowserExtraction.model_validate_json(cleaned)
 
-    def _materialise(self, records: list[BrowserRecord], permitted_domains: Iterable[str]) -> SourceFetchResult:
+    def _materialise(
+        self,
+        records: list[BrowserRecord],
+        permitted_domains: Iterable[str],
+        *,
+        max_records: int | None = None,
+    ) -> SourceFetchResult:
         articles: list[Article] = []
         claims: list[Claim] = []
         events: list[Event] = []
@@ -750,6 +1180,8 @@ class BrowserUseSourceAdapter:
                 )
             )
             articles.append(article)
+            if max_records is not None and len(articles) >= max_records:
+                break
         return SourceFetchResult(
             status=SourceStatus(source="Browser Use", source_type="dynamic"),
             articles=articles,
@@ -780,6 +1212,11 @@ class BrowserUseSourceAdapter:
 # 友好别名便于发现，同时保持应用 wiring 使用的显式名称。
 GitHubAdapter = GitHubSourceAdapter
 BrowserUseAdapter = BrowserUseSourceAdapter
+FeedSourceAdapter = RSSSourceAdapter
+RssSourceAdapter = RSSSourceAdapter
+RSSAdapter = RSSSourceAdapter
+AtomSourceAdapter = RSSSourceAdapter
+OfficialBlogAdapter = OfficialBlogSourceAdapter
 
 __all__ = [
     "BrowserExtraction",
@@ -788,6 +1225,13 @@ __all__ = [
     "BrowserUseSourceAdapter",
     "GitHubAdapter",
     "GitHubSourceAdapter",
+    "FeedSourceAdapter",
+    "RssSourceAdapter",
+    "RSSAdapter",
+    "AtomSourceAdapter",
+    "OfficialBlogAdapter",
+    "OfficialBlogSourceAdapter",
+    "RSSSourceAdapter",
     "SourceFetchResult",
 ]
 

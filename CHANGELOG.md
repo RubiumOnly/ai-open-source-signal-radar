@@ -1,5 +1,12 @@
 # 更新记录
 
+## Unreleased
+
+- 增加 RSS/Atom 官方博客来源，支持时间窗口、去重、响应大小限制和显式失败状态；
+- 增加 CLI/API 的多来源编排、RSS feed 参数和窗口过滤；
+- 使用 browser-use 原生 `ChatDeepSeek` wrapper，保留 OpenAI-compatible fallback；
+- 锁定 FastAPI 与 Starlette 的兼容范围，并补充 Live 集成测试。
+
 ## 0.1.0 - 2026-09-29
 
 - 增加 GitHub Releases/Issues 只读采集器；

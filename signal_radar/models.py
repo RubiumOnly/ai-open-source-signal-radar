@@ -198,6 +198,7 @@ class RunRequest(ContractModel):
     sources: list[str] = Field(default_factory=lambda: ["github"])
     source: str | None = None
     urls: list[str] = Field(default_factory=list)
+    feed_urls: list[str] = Field(default_factory=list)
     fixture: str | None = None
 
 

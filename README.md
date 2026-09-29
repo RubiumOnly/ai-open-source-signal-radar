@@ -29,7 +29,7 @@ Dashboard / API
       |
 Run Orchestrator  -- 运行 ID、预算、重试、超时、只读策略
       |
-来源适配器：GitHub API / Replay fixture / Browser Use 动态网页（RSS 和官方博客可继续扩展）
+来源适配器：GitHub API / RSS 与 Atom 官方博客 / Replay fixture / Browser Use 动态网页
       |
 Browser Use 回退：动态页面、跨页上下文、授权后的本地会话
       |
@@ -55,6 +55,28 @@ Trace、URL、截图、失败记录、评测指标
 | `metadata_only` | 只能取得标题/时间等元数据，不把它伪装成正文证据 |
 
 CSDN、知乎等登录或反爬平台不是 MVP 的硬依赖。Agent 不绕过验证码、付费墙或访问控制，不保存账号密码和 Cookie，不自动点赞、评论、发帖或下单。Live 模式的浏览器会话应留在用户机器上；后端只接收经过筛选的证据。
+
+### RSS/Atom 与官方博客
+
+官方博客、产品更新日志等稳定来源优先通过标准 RSS 2.0 或 Atom 1.x feed 读取，不需要启动浏览器。`RSSSourceAdapter` 使用标准库 `urllib` 和 `xml.etree.ElementTree`，具备请求超时、响应大小上限、条数上限、时间窗口过滤和跨 feed 去重。每条文章都会保存原始链接、发布时间、摘要/正文摘录与 feed 格式，最终映射为 `Article`、`Evidence`、`Claim` 和 `Event`。
+
+可以在 Python 中读取一个或多个公开 feed：
+
+```python
+from datetime import datetime, timezone
+
+from signal_radar.sources import RSSSourceAdapter
+
+adapter = RSSSourceAdapter(timeout=8, max_limit=50)
+result = adapter.collect(
+    ["https://example.com/blog/feed.xml"],
+    limit=10,
+    since=datetime(2026, 1, 1, tzinfo=timezone.utc),
+)
+print(result.status.model_dump())
+```
+
+Feed 不可访问、需要登录、被限流或 XML 无法解析时，适配器返回显式的 `SourceStatus`（例如 `auth_required`、`rate_limited`、`blocked` 或 `error`），不会静默丢弃来源，也不会读取本地模型密钥。没有正文的 feed 条目会将证据等级标为 `excerpt`，不会伪装成完整文章。
 
 ## 快速开始
 
@@ -88,6 +110,13 @@ python -m signal_radar --mode live --project browser-use/browser-use --days 30 -
 
 具体命令以 `python -m signal_radar --help` 为准。没有凭据时请使用 Replay，不要把 Key 写入前端或提交到 Git。
 
+读取公开 RSS/Atom feed：
+
+```powershell
+python -m signal_radar --mode live --project browser-use/browser-use --source rss `
+  --feed-url https://example.com/blog/feed.xml --days 30 --limit 10
+```
+
 启动本地 API（供 `web/` Dashboard 使用）：
 
 ```powershell
@@ -113,6 +142,7 @@ $env:MODEL_PROVIDER = "deepseek"
 $env:DEEPSEEK_MODEL = "deepseek-chat"
 $env:SIGNAL_RADAR_BROWSER_ENABLED = "true"
 $env:SIGNAL_RADAR_BROWSER_RUN_LIVE = "true"
+$env:ANONYMIZED_TELEMETRY = "false"
 uvicorn signal_radar.api:app --port 8000
 ```
 
@@ -138,6 +168,7 @@ python -m signal_radar --mode live --project browser-use/browser-use --source br
 ```
 
 本地运行时请将 `.env` 中的变量导出到当前进程（或安装 `.[live]` 后由应用加载）；Docker Compose 会通过 `env_file` 自动传入这些变量。
+`ANONYMIZED_TELEMETRY=false` 可关闭 browser-use 的匿名运行遥测，建议在受控环境中显式设置。
 
 ## 报告契约
 
@@ -231,8 +262,8 @@ tests/              不需要网络/API Key 的契约与单元测试
 
 ## 路线图
 
-- MVP：GitHub Releases/Issues、确定性风险评分和 Browser Use 的显式动态页面适配器；
-- 下一步：增加 RSS、官方博客和更多公开社区来源适配器；
+- 已完成：GitHub Releases/Issues、RSS/Atom 官方博客、确定性风险评分和 Browser Use 动态页面适配器；
+- 增加更多公开社区来源适配器；
 - 增加事件聚类、趋势图、证据摘录和运行 Replay；
 - 通过本地浏览器会话支持授权来源，并加入人工确认点；
 - 增加网页 Prompt Injection 防护、域名白名单、成本预算和失败恢复；

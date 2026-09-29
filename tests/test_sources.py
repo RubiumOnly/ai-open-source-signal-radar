@@ -8,16 +8,22 @@ import types
 import unittest
 from unittest.mock import patch
 
-from signal_radar.sources import BrowserUseSourceAdapter, GitHubSourceAdapter
+from datetime import datetime, timezone
+
+from signal_radar.sources import BrowserRecord, BrowserUseSourceAdapter, GitHubSourceAdapter, RSSSourceAdapter
 
 
 class _Response:
     status = 200
 
     def __init__(self, payload):
-        self._payload = json.dumps(payload).encode("utf-8")
+        self._payload = (
+            payload.encode("utf-8")
+            if isinstance(payload, str)
+            else json.dumps(payload).encode("utf-8")
+        )
 
-    def read(self):
+    def read(self, *_args):
         return self._payload
 
     def getcode(self):
@@ -31,6 +37,103 @@ class _Response:
 
 
 class SourceAdapterTests(unittest.TestCase):
+    RSS_XML = """<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <channel>
+        <title>Signal Blog</title>
+        <item>
+          <title>Release: faster retries</title>
+          <link>https://blog.example.com/releases/retries</link>
+          <guid>retries-1</guid>
+          <pubDate>Mon, 28 Sep 2026 10:00:00 GMT</pubDate>
+          <dc:creator>Maintainer</dc:creator>
+          <description><![CDATA[Retries fixed timeout errors.]]></description>
+        </item>
+        <item>
+          <title>Old post</title>
+          <link>https://blog.example.com/old</link>
+          <pubDate>Mon, 01 Jan 2024 10:00:00 GMT</pubDate>
+          <description>Older context.</description>
+        </item>
+      </channel>
+    </rss>"""
+
+    ATOM_XML = """<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <title>Official Updates</title>
+      <entry>
+        <id>tag:example.com,2026:update-1</id>
+        <title>New browser support</title>
+        <link rel="alternate" href="https://example.com/updates/browser" />
+        <updated>2026-09-29T08:00:00Z</updated>
+        <author><name>Team</name></author>
+        <summary>Improved browser compatibility.</summary>
+        <content type="html"><![CDATA[<p>Improved browser compatibility.</p>]]></content>
+      </entry>
+    </feed>"""
+
+    def test_rss_adapter_maps_entries_and_filters_since(self) -> None:
+        requests = []
+
+        def opener(request, timeout):
+            requests.append((request.full_url, timeout))
+            return _Response(self.RSS_XML)
+
+        result = RSSSourceAdapter(opener=opener).collect(
+            ["https://blog.example.com/feed.xml"],
+            limit=10,
+            since=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result.status.status, "ok")
+        self.assertEqual(len(result.articles), 1)
+        self.assertEqual(result.articles[0].author, "Maintainer")
+        self.assertEqual(result.articles[0].metadata["format"], "rss")
+        self.assertEqual(result.evidence[0].evidence_level, "full_text")
+        self.assertEqual(requests[0][0], "https://blog.example.com/feed.xml")
+        self.assertGreater(requests[0][1], 0)
+
+    def test_atom_adapter_maps_namespaces_and_deduplicates(self) -> None:
+        payloads = {"https://example.com/atom.xml": self.ATOM_XML}
+
+        def opener(request, timeout):
+            return _Response(payloads[request.full_url])
+
+        adapter = RSSSourceAdapter(opener=opener)
+        result = adapter.collect(["https://example.com/atom.xml", "https://example.com/atom.xml"], limit=5)
+        self.assertEqual(result.status.status, "ok")
+        self.assertEqual(len(result.articles), 1)
+        self.assertEqual(result.articles[0].url, "https://example.com/updates/browser")
+        self.assertEqual(result.articles[0].metadata["format"], "atom")
+        self.assertEqual(result.claims[0].claim_type, "official_update")
+
+    def test_feed_limit_is_global_and_malformed_xml_is_explicit(self) -> None:
+        def opener(request, timeout):
+            return _Response(self.RSS_XML)
+
+        limited = RSSSourceAdapter(opener=opener, max_limit=1).collect(
+            ["https://blog.example.com/feed.xml"], limit=50
+        )
+        self.assertEqual(limited.status.status, "ok")
+        self.assertEqual(len(limited.articles), 1)
+
+        def malformed_opener(request, timeout):
+            return _Response("<rss><channel>")
+
+        malformed = RSSSourceAdapter(opener=malformed_opener).collect(
+            ["https://blog.example.com/feed.xml"]
+        )
+        self.assertEqual(malformed.status.status, "error")
+        self.assertIn("invalid_xml", malformed.status.error or "")
+
+    def test_feed_failures_are_explicit_and_do_not_leak_credentials(self) -> None:
+        def opener(_request, timeout):
+            raise TimeoutError("timed out")
+
+        result = RSSSourceAdapter(opener=opener).collect(["https://example.com/feed.xml"])
+        self.assertEqual(result.status.status, "error")
+        self.assertEqual(result.status.access_status, "error")
+        self.assertIn("timed out", result.status.error or "")
+        self.assertNotIn("DEEPSEEK", (result.status.detail or "").upper())
     def test_browser_use_is_safe_without_dependency_or_opt_in(self) -> None:
         result = BrowserUseSourceAdapter().collect(["https://github.com/org/repo/issues"])
         self.assertIn(result.status.status, {"disabled", "auth_required"})
@@ -121,6 +224,78 @@ class SourceAdapterTests(unittest.TestCase):
         self.assertEqual(result.claims[0].stance, "support")
         self.assertEqual(llm_calls[0]["base_url"], "https://api.deepseek.com")
         self.assertEqual(llm_calls[0]["model"], "deepseek-chat")
+
+    def test_deepseek_prefers_browser_use_native_wrapper(self) -> None:
+        calls = []
+
+        class FakeDeepSeek:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+                self.kwargs = kwargs
+
+        class UnexpectedOpenAI:
+            def __init__(self, **_kwargs):
+                raise AssertionError("generic ChatOpenAI should not be selected for DeepSeek")
+
+        fake_module = types.SimpleNamespace(
+            ChatDeepSeek=FakeDeepSeek,
+            ChatOpenAI=UnexpectedOpenAI,
+        )
+        adapter = BrowserUseSourceAdapter(
+            enabled=True,
+            run_live=True,
+            deepseek_api_key="test",
+            provider="deepseek",
+            model="deepseek-chat",
+            base_url="https://api.deepseek.com",
+        )
+        llm = adapter._build_llm(fake_module)
+        self.assertIsInstance(llm, FakeDeepSeek)
+        self.assertEqual(calls, [{
+            "model": "deepseek-chat",
+            "api_key": "test",
+            "base_url": "https://api.deepseek.com",
+        }])
+
+    def test_deepseek_falls_back_when_native_wrapper_signature_differs(self) -> None:
+        class IncompatibleDeepSeek:
+            def __init__(self, **_kwargs):
+                raise TypeError("legacy wrapper")
+
+        class GenericOpenAI:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        fake_module = types.SimpleNamespace(
+            ChatDeepSeek=IncompatibleDeepSeek,
+            ChatOpenAI=GenericOpenAI,
+        )
+        adapter = BrowserUseSourceAdapter(
+            enabled=True,
+            run_live=True,
+            deepseek_api_key="test",
+            provider="deepseek",
+            model="deepseek-chat",
+            base_url="https://api.deepseek.com",
+        )
+        llm = adapter._build_llm(fake_module)
+        self.assertIsInstance(llm, GenericOpenAI)
+        self.assertEqual(llm.kwargs["base_url"], "https://api.deepseek.com")
+
+    def test_browser_use_honours_record_limit_after_model_output(self) -> None:
+        adapter = BrowserUseSourceAdapter(allowed_domains=["github.com"])
+        records = [
+            {"title": "one", "url": "https://github.com/org/repo/issues/1"},
+            {"title": "two", "url": "https://github.com/org/repo/issues/2"},
+        ]
+        # Use the public Pydantic contract so this test catches truncation
+        # independently of the live model and browser runtime.
+        result = adapter._materialise(
+            [BrowserRecord(**record) for record in records],
+            ["github.com"],
+            max_records=1,
+        )
+        self.assertEqual(len(result.articles), 1)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,7 @@ from .models import (
 )
 from .repository import FixtureReportRepository, load_fixture_report
 from .scoring import aggregate_report
-from .sources import BrowserUseSourceAdapter, GitHubSourceAdapter, SourceFetchResult
+from .sources import BrowserUseSourceAdapter, GitHubSourceAdapter, RSSSourceAdapter, SourceFetchResult
 
 try:
     from dotenv import load_dotenv
@@ -74,6 +74,7 @@ def _live_report(
     run_id: str,
     github: GitHubSourceAdapter,
     browser: BrowserUseSourceAdapter,
+    rss: RSSSourceAdapter | None = None,
 ) -> tuple[Report, list[SourceStatus]]:
     repository = _project_value(payload)
     requested_sources = [payload.source] if payload.source else payload.sources
@@ -81,13 +82,14 @@ def _live_report(
     if not requested_sources:
         requested_sources = ["github"]
     if "all" in requested_sources:
-        requested_sources = ["github", "browser_use"]
-    if any(item in requested_sources for item in ("official", "media")):
+        requested_sources = ["github", "rss", "browser_use"]
+    if "media" in requested_sources:
         requested_sources.append("browser_use")
 
     results: list[SourceFetchResult] = []
+    since = datetime.now(timezone.utc) - timedelta(days=payload.window_days)
     if "github" in requested_sources or "github_api" in requested_sources:
-        results.append(github.collect(repository, limit=payload.limit))
+        results.append(github.collect(repository, limit=payload.limit, since=since))
     if "browser_use" in requested_sources or "browser" in requested_sources or "dynamic" in requested_sources:
         urls = list(payload.urls)
         if not urls:
@@ -96,6 +98,22 @@ def _live_report(
                 f"https://github.com/{repository}/issues",
             ]
         results.append(browser.collect(urls, limit=payload.limit))
+    if "rss" in requested_sources or "feed" in requested_sources or "official" in requested_sources:
+        if rss is None:
+            results.append(
+                SourceFetchResult(
+                    status=SourceStatus(
+                        source="RSS/Atom",
+                        source_type="official",
+                        status="disabled",
+                        access_status="not_configured",
+                        detail="RSS adapter is not configured",
+                    )
+                )
+            )
+        else:
+            feed_urls = payload.feed_urls or list(rss.feed_urls)
+            results.append(rss.collect(feed_urls, limit=payload.limit, since=since))
     if not results:
         results.append(
             SourceFetchResult(
@@ -135,6 +153,7 @@ def create_app(
     repository: FixtureReportRepository | None = None,
     github_adapter: GitHubSourceAdapter | None = None,
     browser_adapter: BrowserUseSourceAdapter | None = None,
+    rss_adapter: RSSSourceAdapter | None = None,
 ) -> Any:
     """构建支持注入存储和适配器的应用，便于测试。"""
 
@@ -151,6 +170,13 @@ def create_app(
             if item.strip()
         ),
         max_steps=int(os.getenv("SIGNAL_RADAR_BROWSER_MAX_STEPS", "12")),
+    )
+    rss_adapter = rss_adapter or RSSSourceAdapter(
+        feed_urls=tuple(
+            item.strip()
+            for item in os.getenv("SIGNAL_RADAR_RSS_FEEDS", "").split(",")
+            if item.strip()
+        ),
     )
     service = FastAPI(title="Signal Radar API", version=SERVICE_VERSION)
     # API 默认只读。宽松策略便于本地/静态仪表盘使用，部署时可收窄来源。
@@ -205,6 +231,7 @@ def create_app(
                     run_id=run_id,
                     github=github_adapter,
                     browser=browser_adapter,
+                    rss=rss_adapter,
                 )
                 status_name = "completed" if all(item.status in {"ok", "replay"} for item in statuses) else "partial"
                 error = None
