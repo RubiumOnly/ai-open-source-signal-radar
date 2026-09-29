@@ -1,5 +1,7 @@
 # AI 开源项目社区反馈与版本风险雷达
 
+当前版本：`0.2.0`
+
 这是一个基于 `browser-use` 的可审计研究型 Agent：它围绕一个 AI 开源项目，汇总版本事实、开发者社区反馈和公开技术文章，生成带证据引用的风险报告。
 
 项目的目标不是宣称“抓取全网舆情”，也不是把 GitHub 代码当成舆情。GitHub Issues、Discussions、Pull Requests 和 Releases 代表项目参与者的反馈与维护状态；外部网站用于补充使用体验。报告会区分**事实、观点、统计信号和推断**，并在证据不足时明确标注不确定性。
@@ -29,7 +31,7 @@ Dashboard / API
       |
 Run Orchestrator  -- 运行 ID、预算、重试、超时、只读策略
       |
-来源适配器：GitHub API / RSS 与 Atom 官方博客 / Replay fixture / Browser Use 动态网页
+来源适配器：GitHub API / RSS 与 Atom 官方博客 / Hacker News Algolia / Replay fixture / Browser Use 动态网页
       |
 Browser Use 回退：动态页面、跨页上下文、授权后的本地会话
       |
@@ -77,6 +79,34 @@ print(result.status.model_dump())
 ```
 
 Feed 不可访问、需要登录、被限流或 XML 无法解析时，适配器返回显式的 `SourceStatus`（例如 `auth_required`、`rate_limited`、`blocked` 或 `error`），不会静默丢弃来源，也不会读取本地模型密钥。没有正文的 feed 条目会将证据等级标为 `excerpt`，不会伪装成完整文章。
+
+### Hacker News 公共社区
+
+Hacker News 通过公开的 Algolia API 提供 story/comment 索引。`HackerNewsSourceAdapter`
+只向固定的 `hn.algolia.com` 发起 GET 请求，不需要登录，也不会执行帖子中的指令。评论正文或
+story 文本会保存为可引用证据；只有标题的命中会标记为 `metadata_only`。查询默认使用项目名，
+也可以显式指定关键词：
+
+```powershell
+python -m signal_radar --mode live --project browser-use/browser-use `
+  --source hackernews --community-query "browser-use" --days 30 --limit 10
+```
+
+API 请求示例：
+
+```json
+{
+  "mode": "live",
+  "project": "browser-use/browser-use",
+  "sources": ["github", "community"],
+  "community_query": "browser-use",
+  "window_days": 30,
+  "limit": 10
+}
+```
+
+社区来源代表 Hacker News 参与者的公开讨论，不等于全部用户或市场舆情。Algolia 接口失败、
+限流或返回异常时，运行状态会保留 `error` / `rate_limited`，报告不会静默补写内容。
 
 ## 快速开始
 
@@ -152,7 +182,8 @@ uvicorn signal_radar.api:app --port 8000
 Invoke-RestMethod http://localhost:8000/api/run -Method Post -ContentType "application/json" -Body (@{
   mode = "live"
   project = "browser-use/browser-use"
-  sources = @("github", "browser_use")
+  sources = @("github", "community", "browser_use")
+  community_query = "browser-use"
   urls = @("https://github.com/browser-use/browser-use/discussions")
   window_days = 30
   limit = 5
@@ -161,11 +192,52 @@ Invoke-RestMethod http://localhost:8000/api/run -Method Post -ContentType "appli
 
 动态页面记录会区分“可核验摘录”和“仅有标题/链接的元数据”。如果模型没有明确标记原文摘录或可见日期，系统会丢弃对应正文/时间并降低证据等级，不会把推断内容写进报告。
 
+### 运行预算与取消
+
+Live 运行默认带有硬边界：Browser Use 最多执行 12 步、单次浏览预算默认为 180 秒；
+服务端还会把请求值限制在适配器配置的上限内。可以在请求中传入更小的预算，并用一个
+预先指定的 `run_id` 让另一个客户端请求取消正在运行的任务：
+
+```powershell
+$body = @{
+  mode = "live"
+  run_id = "run-local-demo"
+  project = "browser-use/browser-use"
+  sources = @("browser_use")
+  urls = @("https://github.com/browser-use/browser-use/discussions")
+  max_steps = 6
+  timeout_seconds = 60
+} | ConvertTo-Json
+Invoke-RestMethod http://localhost:8000/api/run -Method Post -ContentType "application/json" -Body $body
+```
+
+在运行完成前，另一个终端可以发出取消请求：
+
+```powershell
+Invoke-RestMethod http://localhost:8000/api/runs/run-local-demo/cancel -Method Post
+```
+
+取消是协作式的：Browser Use 会停止当前任务，运行状态会变成 `cancelled`；已经完成的
+运行不能撤销。`GET /api/runs/{run_id}` 会返回结构化预算、来源状态和取消标志，方便
+审计实际消耗，而不是只记录最终报告。
+
+#### 网页 Prompt Injection 与只读边界
+
+动态页面中的文字始终是不可信数据。页面可能出现“忽略之前指令”“上传
+凭据”或类似伪装成系统消息的内容；Browser Use 任务只把它们当作待分析的
+页面文本，不会改变系统策略，也不会执行登录、提交、点赞、下载或跨域跳转。
+未被模型明确标记为可见原文的摘录会被清空并降级为 `metadata_only`。这条边界
+有本地回归 fixture 覆盖：
+
+```powershell
+python -m unittest tests.test_prompt_injection_security -v
+```
+
 也可以使用 CLI 触发动态来源。必须同时显式开启适配器和实时执行，并重复传入需要访问的 URL：
 
 ```powershell
 python -m signal_radar --mode live --project browser-use/browser-use --source browser_use `
-  --url https://github.com/browser-use/browser-use/discussions `
+  --url https://github.com/browser-use/browser-use/discussions --max-steps 6 --timeout-seconds 60 `
   --enable-browser-use --browser-run-live --limit 5
 ```
 
@@ -231,6 +303,16 @@ python -m signal_radar.evaluate `
 无法解析时命令返回非零退出码，并在 `schema_errors` 中给出可读原因。
 `fixtures/evaluation_inconsistent.json` 是一个专门用于验证失败检测的最小样例。
 
+评测输出还包含 `security` 和对应的 `checks`：
+
+- `security.unauthorized_action_target`：运行时上报的未授权动作目标数，必须为 `0`；
+- `security.metadata_only_evidence_count`：只含元数据的证据数量；
+- `security.metadata_only_quotes_empty`：所有 `metadata_only` 证据都必须没有正文摘录；
+- `checks.unauthorized_action_target_zero` 与 `checks.metadata_only_quotes_empty`：安全门禁，任一失败都会使 `passed=false`。
+
+`fixtures/prompt_injection_browser_use.json` 演示了页面含有指令样文本时的安全
+结果：页面标题可以保留为待分析元数据，但正文证据为空，且未授权动作目标为零。
+
 ### 运行历史与报告导出
 
 API 默认将运行记录和报告快照保存到 `data/runs.sqlite3`；`data/` 已加入 `.gitignore`，不会进入仓库。也可以通过 `SIGNAL_RADAR_HISTORY_DB` 指定数据库路径。
@@ -282,8 +364,12 @@ docker compose up --build
 ```
 
 服务默认监听 `http://localhost:8000`。Live 部署应单独构建受控镜像并安装 `.[live]`，同时配置域名白名单、资源预算和人工确认策略；不要把宿主机 Chrome Cookie 挂载到公共服务。
+GitHub API、RSS 和 Hacker News 请求会在来源调用前后检查总预算，但同步 HTTP 请求本身无法被线程外硬中断；它们完成后会被统一标记为 `partial` 或 `cancelled`。Browser Use 任务支持真实的超时和协作式取消。
 
 主要 API：`GET /api/health` 检查服务，`GET /api/report` 读取当前报告，`GET /api/sources` 查看来源状态，`POST /api/run` 启动 Replay 或 Live 运行。接口返回的报告遵循上面的 `Report` 契约。
+运行控制 API：`GET /api/runs` 查看历史，`GET /api/runs/{run_id}` 查看预算和结果，
+`POST /api/runs/{run_id}/cancel` 请求取消仍在运行的任务，`GET /api/runs/{run_id}/markdown`
+导出可审计 Markdown 报告。
 
 ## 目录约定
 
@@ -302,14 +388,17 @@ tests/              不需要网络/API Key 的契约与单元测试
 - 凭据、浏览器权限和漏洞报告规则见 [`SECURITY.md`](SECURITY.md)；
 - 版本变化见 [`CHANGELOG.md`](CHANGELOG.md)。
 
-## 路线图
+仓库的 GitHub Actions 会在 Python 3.11/3.12 下运行契约测试、离线评测、编译检查、依赖检查和前端语法检查。
 
-- 已完成：GitHub Releases/Issues、RSS/Atom 官方博客、确定性风险评分和 Browser Use 动态页面适配器；
-- 增加更多公开社区来源适配器；
-- 增加事件聚类、趋势图、证据摘录和运行 Replay；
-- 通过本地浏览器会话支持授权来源，并加入人工确认点；
-- 增加网页 Prompt Injection 防护、域名白名单、成本预算和失败恢复；
-- 建立带人工标注的回归评测集。
+## 当前扩展版范围
+
+- 已完成多源采集：GitHub、RSS/Atom、Hacker News Algolia 和 Browser Use 动态页面；
+- 已完成证据链、趋势、主题、关键事件、风险评分与 Markdown 导出；
+- 已完成 SQLite 运行历史、预算、取消接口、域名白名单和 Prompt Injection 回归门禁；
+- 已完成离线评测 harness、失败样例、GitHub Actions 质量门禁和桌面/移动截图；
+- 登录来源仍保持只读和人工授权边界，不绕过验证码、付费墙或访问控制。
+
+后续可选方向包括定时调度、账号认证、人工标注平台和更完整的行业来源适配器；它们不影响当前扩展版的本地可复现闭环。
 
 ## 设计与工程要点
 

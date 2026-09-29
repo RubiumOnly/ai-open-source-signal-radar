@@ -1,6 +1,6 @@
 # 更新记录
 
-## Unreleased
+## 0.2.0 - 2026-09-29
 
 - 增加 RSS/Atom 官方博客来源，支持时间窗口、去重、响应大小限制和显式失败状态；
 - 增加 CLI/API 的多来源编排、RSS feed 参数和窗口过滤；
@@ -9,6 +9,13 @@
 - Dashboard 增加关键事件、风险信号和证据回链；
 - 收紧 fixture 路径、RSS 网络目标和 Browser Use 域名白名单边界；
 - 动态抽取对不可核验的日期和正文降级为 metadata-only。
+- 增加 SQLite 运行历史、Markdown 报告导出和离线评测 harness；
+- 增加 Hacker News 社区来源、运行预算、协作式取消和请求级 CORS 白名单；
+- 增加 Prompt Injection 回归 fixture、安全评测门禁、CI 工作流和 Dashboard 桌面/移动截图。
+
+## Unreleased
+
+后续可选方向：定时调度、账号认证、人工标注平台和更多行业来源适配器。
 
 ## 0.1.0 - 2026-09-29
 

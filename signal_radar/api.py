@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import uuid
 import os
+import inspect
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +17,7 @@ from .models import (
     ProjectInfo,
     Report,
     Run,
+    RunBudget,
     RunRequest,
     RunResponse,
     SourceStatus,
@@ -21,7 +25,13 @@ from .models import (
 from .history import DEFAULT_HISTORY_PATH, HistoryStore
 from .repository import FixtureReportRepository, load_fixture_report
 from .scoring import aggregate_report
-from .sources import BrowserUseSourceAdapter, GitHubSourceAdapter, RSSSourceAdapter, SourceFetchResult
+from .sources import (
+    BrowserUseSourceAdapter,
+    GitHubSourceAdapter,
+    HackerNewsSourceAdapter,
+    RSSSourceAdapter,
+    SourceFetchResult,
+)
 
 try:
     from dotenv import load_dotenv
@@ -38,7 +48,70 @@ except ImportError:  # pragma: no cover - 仅在最小运行环境中触发
     CORSMiddleware = None  # type: ignore[assignment,misc]
 
 
-SERVICE_VERSION = "0.1.0"
+SERVICE_VERSION = "0.2.0"
+
+
+class RunControl:
+    """Thread-safe cancellation handle shared by the API and live adapters."""
+
+    def __init__(self) -> None:
+        self.cancel_event = threading.Event()
+
+    @property
+    def cancel_requested(self) -> bool:
+        return self.cancel_event.is_set()
+
+
+def _budget_for(payload: RunRequest, browser: BrowserUseSourceAdapter) -> RunBudget:
+    """Resolve request budget without allowing it to exceed adapter hard caps."""
+
+    configured_steps = max(1, min(int(getattr(browser, "max_steps", 12)), 40))
+    configured_timeout = max(1.0, min(float(getattr(browser, "timeout_seconds", 180.0)), 900.0))
+    requested = payload.budget
+    steps = payload.max_steps or (requested.max_steps if requested else configured_steps)
+    timeout = payload.timeout_seconds or (requested.timeout_seconds if requested else configured_timeout)
+    return RunBudget(
+        max_steps=max(1, min(int(steps), configured_steps, 40)),
+        timeout_seconds=max(0.1, min(float(timeout), configured_timeout, 900.0)),
+    )
+
+
+def _browser_collect(
+    browser: BrowserUseSourceAdapter,
+    urls: list[str],
+    *,
+    limit: int,
+    budget: RunBudget,
+    cancel_event: threading.Event | None,
+) -> SourceFetchResult:
+    """Call old injected adapters and new budget-aware adapters alike."""
+
+    collector = browser.collect
+    kwargs: dict[str, Any] = {"limit": limit}
+    try:
+        parameters = inspect.signature(collector).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts_kwargs = any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
+    for name, value in (
+        ("max_steps", budget.max_steps),
+        ("timeout_seconds", budget.timeout_seconds),
+        ("cancel_event", cancel_event),
+    ):
+        if accepts_kwargs or name in parameters:
+            kwargs[name] = value
+    return collector(urls, **kwargs)
+
+
+def _cancelled_status(detail: str = "Run cancelled before all sources completed") -> SourceStatus:
+    return SourceStatus(
+        source="Run Orchestrator",
+        source_type="system",
+        status="cancelled",
+        access_status="unavailable",
+        detail=detail,
+        error="cancelled",
+    )
 
 # Explicit fixture paths are useful for local replay, but must stay inside the
 # repository's fixture directories. Resolving before containment checks also
@@ -115,8 +188,12 @@ def _live_report(
     github: GitHubSourceAdapter,
     browser: BrowserUseSourceAdapter,
     rss: RSSSourceAdapter | None = None,
+    hackernews: HackerNewsSourceAdapter | None = None,
+    budget: RunBudget | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[Report, list[SourceStatus]]:
     repository = _project_value(payload)
+    budget = budget or _budget_for(payload, browser)
     requested_sources = [payload.source] if payload.source else payload.sources
     requested_sources = list(
         dict.fromkeys(str(item).lower().replace("-", "_") for item in requested_sources if item)
@@ -124,24 +201,47 @@ def _live_report(
     if not requested_sources:
         requested_sources = ["github"]
     if "all" in requested_sources:
-        requested_sources = ["github", "rss", "browser_use"]
+        requested_sources = ["github", "rss", "hackernews", "browser_use"]
     if "media" in requested_sources:
         requested_sources.append("browser_use")
 
     results: list[SourceFetchResult] = []
     since = datetime.now(timezone.utc) - timedelta(days=payload.window_days)
+    deadline = time.monotonic() + budget.timeout_seconds
+
+    def cancelled() -> bool:
+        return bool(cancel_event and cancel_event.is_set()) or time.monotonic() >= deadline
+
     if "github" in requested_sources or "github_api" in requested_sources:
-        results.append(github.collect(repository, limit=payload.limit, since=since))
+        if cancelled():
+            results.append(SourceFetchResult(status=_cancelled_status("Run budget expired before GitHub collection")))
+        else:
+            results.append(github.collect(repository, limit=payload.limit, since=since))
     if "browser_use" in requested_sources or "browser" in requested_sources or "dynamic" in requested_sources:
-        urls = list(payload.urls)
-        if not urls:
-            urls = [
-                f"https://github.com/{repository}/discussions",
-                f"https://github.com/{repository}/issues",
-            ]
-        results.append(browser.collect(urls, limit=payload.limit))
+        if cancelled():
+            results.append(SourceFetchResult(status=_cancelled_status("Run budget expired before Browser Use collection")))
+        else:
+            urls = list(payload.urls)
+            if not urls:
+                urls = [
+                    f"https://github.com/{repository}/discussions",
+                    f"https://github.com/{repository}/issues",
+                ]
+            remaining = max(0.1, deadline - time.monotonic())
+            browser_budget = RunBudget(max_steps=budget.max_steps, timeout_seconds=min(budget.timeout_seconds, remaining))
+            results.append(
+                _browser_collect(
+                    browser,
+                    urls,
+                    limit=payload.limit,
+                    budget=browser_budget,
+                    cancel_event=cancel_event,
+                )
+            )
     if "rss" in requested_sources or "feed" in requested_sources or "official" in requested_sources:
-        if rss is None:
+        if cancelled():
+            results.append(SourceFetchResult(status=_cancelled_status("Run budget expired before RSS collection")))
+        elif rss is None:
             results.append(
                 SourceFetchResult(
                     status=SourceStatus(
@@ -156,6 +256,26 @@ def _live_report(
         else:
             feed_urls = payload.feed_urls or list(rss.feed_urls)
             results.append(rss.collect(feed_urls, limit=payload.limit, since=since))
+    if "hackernews" in requested_sources or "hacker_news" in requested_sources or "community" in requested_sources:
+        if cancelled():
+            results.append(SourceFetchResult(status=_cancelled_status("Run budget expired before Hacker News collection")))
+        elif hackernews is None:
+            results.append(
+                SourceFetchResult(
+                    status=SourceStatus(
+                        source="Hacker News",
+                        source_type="community",
+                        status="disabled",
+                        access_status="not_configured",
+                        detail="Hacker News adapter is not configured",
+                    )
+                )
+            )
+        else:
+            query = payload.community_query or repository.rsplit("/", 1)[-1]
+            results.append(hackernews.collect(query, limit=payload.limit, since=since))
+    if cancelled() and not any(result.status.status == "cancelled" for result in results):
+        results.append(SourceFetchResult(status=_cancelled_status()))
     if not results:
         results.append(
             SourceFetchResult(
@@ -196,6 +316,7 @@ def create_app(
     github_adapter: GitHubSourceAdapter | None = None,
     browser_adapter: BrowserUseSourceAdapter | None = None,
     rss_adapter: RSSSourceAdapter | None = None,
+    hackernews_adapter: HackerNewsSourceAdapter | None = None,
     history_store: HistoryStore | None = None,
 ) -> Any:
     """构建支持注入存储和适配器的应用，便于测试。"""
@@ -213,6 +334,7 @@ def create_app(
             if item.strip()
         ),
         max_steps=_env_int("SIGNAL_RADAR_BROWSER_MAX_STEPS", 12, 1, 40),
+        timeout_seconds=_env_int("SIGNAL_RADAR_BROWSER_TIMEOUT_SECONDS", 180, 1, 900),
     )
     rss_adapter = rss_adapter or RSSSourceAdapter(
         feed_urls=tuple(
@@ -221,20 +343,33 @@ def create_app(
             if item.strip()
         ),
     )
+    hackernews_adapter = hackernews_adapter or HackerNewsSourceAdapter(
+        timeout=_env_int("SIGNAL_RADAR_HACKERNEWS_TIMEOUT", 8, 1, 60),
+        max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 50, 1, 100),
+    )
     history_store = history_store or HistoryStore(
         os.getenv("SIGNAL_RADAR_HISTORY_DB") or DEFAULT_HISTORY_PATH
     )
     service = FastAPI(title="Signal Radar API", version=SERVICE_VERSION)
-    # API 默认只读。宽松策略便于本地/静态仪表盘使用，部署时可收窄来源。
+    cors_origins = [
+        item.strip()
+        for item in os.getenv(
+            "SIGNAL_RADAR_CORS_ORIGINS",
+            "http://localhost:4173,http://127.0.0.1:4173",
+        ).split(",")
+        if item.strip()
+    ]
+    # Live POST runs must not be triggerable by arbitrary third-party origins.
     service.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cors_origins,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
     service.state.latest_report = None
     service.state.latest_run = None
     service.state.history_store = history_store
+    service.state.active_controls: dict[str, RunControl] = {}
 
     @service.get("/api/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -276,6 +411,19 @@ def create_app(
             raise HTTPException(status_code=404, detail="run not found")
         return response
 
+    @service.post("/api/runs/{run_id}/cancel", status_code=202)
+    def cancel_run(run_id: str) -> dict[str, str]:
+        """Request cancellation of a live run; the worker observes the event."""
+
+        control = service.state.active_controls.get(run_id)
+        if control is None:
+            response = history_store.get(run_id)
+            if response is None:
+                raise HTTPException(status_code=404, detail="run not found")
+            raise HTTPException(status_code=409, detail="run is no longer active")
+        control.cancel_event.set()
+        return {"run_id": run_id, "status": "cancellation_requested"}
+
     def markdown_export(run_id: str) -> Any:
         from fastapi.responses import PlainTextResponse
 
@@ -301,8 +449,26 @@ def create_app(
     )
 
     def execute(payload: RunRequest) -> RunResponse:
-        run_id = _run_id()
+        run_id = payload.run_id or _run_id()
+        if run_id in service.state.active_controls:
+            raise HTTPException(status_code=409, detail="run_id is already active")
         started = datetime.now(timezone.utc)
+        budget = _budget_for(payload, browser_adapter)
+        control = RunControl()
+        # Replay completes synchronously and has nothing useful to cancel.
+        if payload.mode == "live":
+            service.state.active_controls[run_id] = control
+        running = Run(
+            run_id=run_id,
+            mode=payload.mode,
+            status="running",
+            subject=_project_value(payload),
+            window_days=payload.window_days,
+            started_at=started,
+            budget=budget,
+        )
+        service.state.latest_run = running
+        history_store.save(running, None)
         if payload.mode == "replay":
             report_value = (
                 load_fixture_report(_safe_fixture_path(repository, payload.fixture))
@@ -321,14 +487,20 @@ def create_app(
                     github=github_adapter,
                     browser=browser_adapter,
                     rss=rss_adapter,
+                    hackernews=hackernews_adapter,
+                    budget=budget,
+                    cancel_event=control.cancel_event,
                 )
-                status_name = "completed" if all(item.status in {"ok", "replay"} for item in statuses) else "partial"
-                error = None
+                cancelled = control.cancel_requested or any(
+                    item.status == "cancelled" or item.error == "cancelled" for item in statuses
+                )
+                status_name = "cancelled" if cancelled else "completed" if all(item.status in {"ok", "replay"} for item in statuses) else "partial"
+                error = "cancelled" if cancelled else None
             except Exception as exc:  # 适配器异常不应拖垮 API 进程
                 report_value = None
                 statuses = []
-                status_name = "failed"
-                error = str(exc)
+                status_name = "cancelled" if control.cancel_requested else "failed"
+                error = "cancelled" if control.cancel_requested else str(exc)
 
         completed = datetime.now(timezone.utc)
         run = Run(
@@ -342,10 +514,13 @@ def create_app(
             report_id=report_value.report_id if report_value else None,
             source_statuses=statuses,
             error=error,
+            budget=budget,
+            cancel_requested=control.cancel_requested,
         )
         service.state.latest_run = run
         service.state.latest_report = report_value
         history_store.save(run, report_value)
+        service.state.active_controls.pop(run_id, None)
         return RunResponse(run=run, report=report_value)
 
     @service.post("/api/run", response_model=RunResponse)

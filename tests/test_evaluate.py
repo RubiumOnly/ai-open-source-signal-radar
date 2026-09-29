@@ -104,7 +104,7 @@ class EvaluationTests(unittest.TestCase):
             output_text = output.read_text(encoding="utf-8")
             payload = json.loads(output_text)
         self.assertIn('"citation_coverage"', output_text)
-        self.assertEqual(payload["evaluator_version"], "0.1.0")
+        self.assertEqual(payload["evaluator_version"], "0.2.0")
 
 
 if __name__ == "__main__":

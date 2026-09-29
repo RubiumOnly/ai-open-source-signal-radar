@@ -1,6 +1,6 @@
 """证据驱动的项目反馈与风险雷达。"""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .models import (
     AccessStatusRecord,
@@ -11,6 +11,7 @@ from .models import (
     ProjectInfo,
     Report,
     Run,
+    RunBudget,
     RunRequest,
     SourceStatus,
 )
@@ -22,6 +23,8 @@ from .sources import (
     AtomSourceAdapter,
     FeedSourceAdapter,
     GitHubSourceAdapter,
+    HackerNewsAdapter,
+    HackerNewsSourceAdapter,
     OfficialBlogAdapter,
     OfficialBlogSourceAdapter,
     RssSourceAdapter,
@@ -39,10 +42,13 @@ __all__ = [
     "ProjectInfo",
     "Report",
     "Run",
+    "RunBudget",
     "RunRequest",
     "SourceStatus",
     "BrowserUseSourceAdapter",
     "GitHubSourceAdapter",
+    "HackerNewsAdapter",
+    "HackerNewsSourceAdapter",
     "FeedSourceAdapter",
     "RssSourceAdapter",
     "RSSAdapter",

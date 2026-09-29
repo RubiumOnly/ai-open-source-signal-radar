@@ -41,6 +41,17 @@ class _FakeRSS:
         )
 
 
+class _FakeHackerNews:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def collect(self, query, *, limit, since):
+        self.calls.append((query, limit, since))
+        return SourceFetchResult(
+            status=SourceStatus(source="Hacker News", source_type="community", status="ok", records=0)
+        )
+
+
 class LiveOrchestrationTests(unittest.TestCase):
     def test_fixture_endpoint_rejects_paths_outside_fixture_roots(self) -> None:
         from fastapi.testclient import TestClient
@@ -85,6 +96,33 @@ class LiveOrchestrationTests(unittest.TestCase):
             rss=rss,
         )
         self.assertEqual(len(rss.calls), 1)
+
+    def test_community_alias_forwards_project_query_to_hackernews(self) -> None:
+        hackernews = _FakeHackerNews()
+        _live_report(
+            RunRequest(mode="live", project="org/repo", sources=["community"], limit=4),
+            run_id="run-community",
+            github=_FakeGitHub(),
+            browser=_FakeBrowser(),
+            hackernews=hackernews,
+        )
+        self.assertEqual(hackernews.calls[0][0:2], ("repo", 4))
+
+    def test_custom_community_query_is_forwarded(self) -> None:
+        hackernews = _FakeHackerNews()
+        _live_report(
+            RunRequest(
+                mode="live",
+                project="org/repo",
+                sources=["hackernews"],
+                community_query="browser-use agent",
+            ),
+            run_id="run-community-custom",
+            github=_FakeGitHub(),
+            browser=_FakeBrowser(),
+            hackernews=hackernews,
+        )
+        self.assertEqual(hackernews.calls[0][0], "browser-use agent")
 
 
 if __name__ == "__main__":

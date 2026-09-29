@@ -38,6 +38,12 @@ class ReplayEndpointSecurityTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_cors_is_limited_to_local_dashboard_origins(self) -> None:
+        allowed = self.client.get("/api/health", headers={"Origin": "http://localhost:4173"})
+        denied = self.client.get("/api/health", headers={"Origin": "https://untrusted.example"})
+        self.assertEqual(allowed.headers.get("access-control-allow-origin"), "http://localhost:4173")
+        self.assertIsNone(denied.headers.get("access-control-allow-origin"))
+
 
 if __name__ == "__main__":
     unittest.main()

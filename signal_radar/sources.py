@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, Field
@@ -795,6 +795,235 @@ class OfficialBlogSourceAdapter(RSSSourceAdapter):
     pass
 
 
+class HackerNewsSourceAdapter:
+    """读取 Hacker News Algolia 的公开搜索结果。
+
+    Algolia 的接口只返回公开的 story/comment 索引，不需要登录。请求固定
+    发往 ``hn.algolia.com``，并在本地再次按时间窗口过滤，避免把远期记录
+    混入报告。评论正文或 story 文本会作为可引用证据；只有标题的命中会
+    降级为 ``metadata_only``，不会伪装成完整内容。
+    """
+
+    base_url = "https://hn.algolia.com/api/v1/search_by_date"
+
+    def __init__(
+        self,
+        *,
+        timeout: float = 8.0,
+        max_limit: int = 50,
+        max_bytes: int = 2_000_000,
+        opener: JsonOpener | None = None,
+    ) -> None:
+        self.timeout = max(0.5, float(timeout))
+        self.max_limit = max(1, min(int(max_limit), 100))
+        self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
+        self._opener = opener or urlopen
+
+    @staticmethod
+    def _normalise_query(query: str | None) -> str | None:
+        value = str(query or "").strip()
+        if not value:
+            return None
+        # Algolia 查询较短且可审计；控制长度也避免意外把整段 prompt 当查询。
+        return value[:160]
+
+    def _fetch(self, query: str, *, limit: int, since: datetime | None) -> tuple[list[dict[str, Any]], int | None, str | None, float]:
+        params: dict[str, str | int] = {
+            "query": query,
+            "tags": "story,comment",
+            "hitsPerPage": limit,
+            "page": 0,
+        }
+        if since:
+            params["numericFilters"] = f"created_at_i>={int(since.timestamp())}"
+        request = Request(
+            f"{self.base_url}?{urlencode(params)}",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "signal-radar/0.1 (+https://github.com/RubiumOnly/ai-open-source-signal-radar)",
+            },
+        )
+        started = time.perf_counter()
+        try:
+            with self._opener(request, timeout=self.timeout) as response:
+                status_code = getattr(response, "status", None) or response.getcode()
+                try:
+                    raw = response.read(self.max_bytes + 1)
+                except TypeError:
+                    raw = response.read()
+            if status_code is not None and status_code >= 400:
+                return [], status_code, f"http_{status_code}", _latency(started)
+            if not isinstance(raw, (bytes, bytearray)):
+                raw = str(raw).encode("utf-8", errors="replace")
+            if len(raw) > self.max_bytes:
+                return [], status_code, "response_too_large", _latency(started)
+            payload = json.loads(bytes(raw).decode("utf-8"))
+            hits = payload.get("hits") if isinstance(payload, dict) else None
+            if not isinstance(hits, list):
+                return [], status_code, "invalid_payload", _latency(started)
+            return [item for item in hits[:limit] if isinstance(item, dict)], status_code, None, _latency(started)
+        except HTTPError as exc:
+            return [], exc.code, _error_detail(exc), _latency(started)
+        except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+            return [], None, str(exc)[:240] or exc.__class__.__name__, _latency(started)
+
+    def collect(
+        self,
+        query: str | None = None,
+        *,
+        limit: int = 20,
+        since: datetime | None = None,
+    ) -> SourceFetchResult:
+        """按关键词读取公开 story/comment，并映射为统一证据记录。"""
+
+        normalised = self._normalise_query(query)
+        if not normalised:
+            return SourceFetchResult(
+                status=SourceStatus(
+                    source="Hacker News",
+                    source_type="community",
+                    status="error",
+                    access_status="error",
+                    detail="A non-empty Hacker News query is required",
+                    error="missing_query",
+                )
+            )
+        bounded_limit = max(1, min(int(limit), self.max_limit))
+        if isinstance(since, str):
+            since = _parse_time(since)
+        if since and since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        hits, status_code, error, latency = self._fetch(normalised, limit=bounded_limit, since=since)
+        if error:
+            status_name, access_name = (
+                ("rate_limited", "rate_limited") if status_code == 429 else
+                ("blocked", "blocked") if status_code == 403 else
+                ("error", "error")
+            )
+            return SourceFetchResult(
+                status=SourceStatus(
+                    source="Hacker News",
+                    source_type="community",
+                    status=status_name,
+                    access_status=access_name,
+                    detail=f"query={normalised!r}",
+                    error=error[:500],
+                    latency_ms=latency,
+                )
+            )
+
+        articles: list[Article] = []
+        evidence: list[Evidence] = []
+        claims: list[Claim] = []
+        events: list[Event] = []
+        for hit in hits:
+            published = _parse_time(hit.get("created_at"))
+            if since and published and published < since:
+                continue
+            object_id = str(hit.get("objectID") or hit.get("story_id") or "")
+            if not object_id:
+                continue
+            is_comment = "comment" in (hit.get("_tags") or []) or bool(hit.get("comment_text"))
+            title = str(hit.get("story_title") or hit.get("title") or "Hacker News discussion").strip()
+            body = str(hit.get("comment_text") or hit.get("story_text") or "").strip()
+            text = f"{title}\n{body}".strip()
+            url = str(hit.get("url") or hit.get("story_url") or "").strip()
+            url = url or f"https://news.ycombinator.com/item?id={quote(object_id, safe='')}"
+            article_id = f"hackernews-{_hash_text(object_id + '|' + url)}"
+            content_hash = _hash_text(text)
+            article = Article(
+                id=article_id,
+                url=url,
+                title=title,
+                source="Hacker News",
+                source_type="community",
+                author=str(hit.get("author") or "").strip() or None,
+                excerpt=(body or title)[:500] or None,
+                content=body or None,
+                published_at=published,
+                access_status="public",
+                content_hash=content_hash,
+                tags=["community", "hackernews", "comment" if is_comment else "story"],
+                metadata={
+                    "collector": "hackernews_algolia",
+                    "object_id": object_id,
+                    "query": normalised,
+                    "points": hit.get("points"),
+                    "num_comments": hit.get("num_comments"),
+                },
+            )
+            stance, sentiment, category = _classify_feedback(text)
+            risk_score = 64.0 if sentiment == "negative" else 18.0 if sentiment == "positive" else 28.0
+            evidence_id = f"ev-{article_id.removeprefix('hackernews-')}"
+            claim_id = f"claim-{article_id.removeprefix('hackernews-')}"
+            event_id = f"event-{article_id.removeprefix('hackernews-')}"
+            evidence_level = "full_text" if body else "metadata_only"
+            confidence = 0.84 if body else 0.58
+            evidence.append(
+                Evidence(
+                    id=evidence_id,
+                    article_id=article_id,
+                    url=url,
+                    source="Hacker News",
+                    title=title,
+                    quote=(body[:600] if body else ""),
+                    evidence_level=evidence_level,
+                    confidence=confidence,
+                    published_at=published,
+                    content_hash=content_hash,
+                )
+            )
+            claims.append(
+                Claim(
+                    id=claim_id,
+                    text=(text[:280].replace("\n", " ") or title),
+                    claim_type="community_discussion" if category == "feedback" else category,
+                    stance=stance,  # type: ignore[arg-type]
+                    sentiment=sentiment,  # type: ignore[arg-type]
+                    confidence=confidence,
+                    evidence_ids=[evidence_id],
+                    article_ids=[article_id],
+                    topics=["community"],
+                )
+            )
+            events.append(
+                Event(
+                    id=event_id,
+                    title=title,
+                    category="community_discussion",
+                    summary=article.excerpt,
+                    risk_level="high" if risk_score >= 60 else "medium" if risk_score >= 30 else "low",
+                    risk_score=risk_score,
+                    sentiment=sentiment,  # type: ignore[arg-type]
+                    occurred_at=published,
+                    article_ids=[article_id],
+                    claim_ids=[claim_id],
+                    evidence_ids=[evidence_id],
+                )
+            )
+            articles.append(article)
+            if len(articles) >= bounded_limit:
+                break
+
+        return SourceFetchResult(
+            status=SourceStatus(
+                source="Hacker News",
+                source_type="community",
+                status="ok",
+                access_status="public",
+                records=len(articles),
+                detail=f"{len(articles)} records for query={normalised!r}",
+                latency_ms=latency,
+            ),
+            articles=articles,
+            claims=claims,
+            events=events,
+            evidence=evidence,
+        )
+
+    fetch = collect
+
+
 def _latency(started: float) -> float:
     return round((time.perf_counter() - started) * 1000.0, 1)
 
@@ -855,6 +1084,19 @@ def _is_allowed_url(url: str, allowed_domains: Iterable[str]) -> bool:
     return any(hostname == domain or hostname.endswith(f".{domain}") for domain in domains)
 
 
+class BrowserRunCancelled(Exception):
+    """Raised internally when a caller cancels an in-flight browser run."""
+
+
+def _event_is_set(event: Any) -> bool:
+    """Accept ``threading.Event`` and asyncio-compatible cancellation events."""
+
+    if event is None:
+        return False
+    checker = getattr(event, "is_set", None)
+    return bool(checker()) if callable(checker) else bool(event)
+
+
 class BrowserUseSourceAdapter:
     """可选的 Browser Use 动态页面适配器。
 
@@ -877,6 +1119,7 @@ class BrowserUseSourceAdapter:
         run_live: bool = False,
         model: str | None = None,
         max_steps: int = 12,
+        timeout_seconds: float = 180.0,
     ) -> None:
         self.enabled = enabled
         self.browser_api_key = api_key or os.getenv("BROWSER_USE_API_KEY")
@@ -890,6 +1133,7 @@ class BrowserUseSourceAdapter:
         default_model = os.getenv("DEEPSEEK_MODEL") if self.provider in {"deepseek", "deepseek-ai"} else os.getenv("OPENAI_MODEL")
         self.model = model or os.getenv("BROWSER_USE_MODEL") or default_model or ("deepseek-chat" if self.provider in {"deepseek", "deepseek-ai"} else "gpt-4o-mini")
         self.max_steps = max(1, min(int(max_steps), 40))
+        self.timeout_seconds = max(1.0, min(float(timeout_seconds), 900.0))
 
     def availability(self) -> dict[str, Any]:
         try:
@@ -920,9 +1164,33 @@ class BrowserUseSourceAdapter:
             )
         )
 
-    def collect(self, urls: Iterable[str] = (), *, limit: int = 10, **_: Any) -> SourceFetchResult:
+    @staticmethod
+    def _cancelled_result(detail: str = "Browser Use run cancelled") -> SourceFetchResult:
+        return SourceFetchResult(
+            status=SourceStatus(
+                source="Browser Use",
+                source_type="dynamic",
+                status="cancelled",
+                access_status="unavailable",
+                detail=detail,
+                error="cancelled",
+            )
+        )
+
+    def collect(
+        self,
+        urls: Iterable[str] = (),
+        *,
+        limit: int = 10,
+        max_steps: int | None = None,
+        timeout_seconds: float | None = None,
+        cancel_event: Any = None,
+        **_: Any,
+    ) -> SourceFetchResult:
         """同步入口，供 FastAPI/CLI 使用；异步调用方可直接使用 ``async_collect``。"""
         values = [str(url).strip() for url in urls if str(url).strip()][: max(1, min(int(limit), 20))]
+        if _event_is_set(cancel_event):
+            return self._cancelled_result()
         if values and self.allowed_domains and not any(_is_allowed_url(url, self.allowed_domains) for url in values):
             return SourceFetchResult(
                 status=SourceStatus(
@@ -940,7 +1208,15 @@ class BrowserUseSourceAdapter:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(self.async_collect(urls, limit=limit))
+            return asyncio.run(
+                self.async_collect(
+                    urls,
+                    limit=limit,
+                    max_steps=max_steps,
+                    timeout_seconds=timeout_seconds,
+                    cancel_event=cancel_event,
+                )
+            )
         return SourceFetchResult(
             status=SourceStatus(
                 source="Browser Use",
@@ -952,8 +1228,19 @@ class BrowserUseSourceAdapter:
             )
         )
 
-    async def async_collect(self, urls: Iterable[str] = (), *, limit: int = 10, **_: Any) -> SourceFetchResult:
+    async def async_collect(
+        self,
+        urls: Iterable[str] = (),
+        *,
+        limit: int = 10,
+        max_steps: int | None = None,
+        timeout_seconds: float | None = None,
+        cancel_event: Any = None,
+        **_: Any,
+    ) -> SourceFetchResult:
         """执行一次有界的只读 Browser Use 采集。"""
+        if _event_is_set(cancel_event):
+            return self._cancelled_result()
         if not self.allowed_domains:
             return self._skipped_result("allowlist_missing")
         bounded_limit = max(1, min(int(limit), 20))
@@ -1008,7 +1295,16 @@ class BrowserUseSourceAdapter:
                 for key in ("step_timeout", "max_failures", "use_vision"):
                     agent_kwargs.pop(key, None)
                 agent = Agent(**agent_kwargs)
-            history = await agent.run(max_steps=self.max_steps)
+            requested_steps = self.max_steps if max_steps is None else max_steps
+            requested_timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
+            effective_steps = max(1, min(int(requested_steps), self.max_steps, 40))
+            effective_timeout = max(0.1, min(float(requested_timeout), 900.0))
+            history = await self._run_agent_with_controls(
+                agent,
+                max_steps=effective_steps,
+                timeout_seconds=effective_timeout,
+                cancel_event=cancel_event,
+            )
             extraction = self._parse_history(history)
             permitted_domains = self.allowed_domains or tuple(urlparse(url).hostname or "" for url in values)
             result = self._materialise(extraction.records, permitted_domains, max_records=bounded_limit)
@@ -1025,6 +1321,20 @@ class BrowserUseSourceAdapter:
                 latency_ms=_latency(started),
             )
             return result
+        except BrowserRunCancelled:
+            return self._cancelled_result()
+        except asyncio.TimeoutError:
+            return SourceFetchResult(
+                status=SourceStatus(
+                    source="Browser Use",
+                    source_type="dynamic",
+                    status="error",
+                    access_status="unavailable",
+                    detail="Browser Use run exceeded its timeout budget",
+                    error="budget_timeout",
+                    latency_ms=_latency(started),
+                )
+            )
         except Exception as exc:  # browser failures become visible source state
             return SourceFetchResult(
                 status=SourceStatus(
@@ -1039,6 +1349,39 @@ class BrowserUseSourceAdapter:
             )
         finally:
             await self._close_session(session)
+
+    async def _run_agent_with_controls(
+        self,
+        agent: Any,
+        *,
+        max_steps: int,
+        timeout_seconds: float,
+        cancel_event: Any = None,
+    ) -> Any:
+        """Run Browser Use while enforcing both deadline and external cancel."""
+
+        task = asyncio.create_task(agent.run(max_steps=max_steps))
+        started = time.perf_counter()
+        try:
+            while not task.done():
+                if _event_is_set(cancel_event):
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise BrowserRunCancelled
+                remaining = timeout_seconds - (time.perf_counter() - started)
+                if remaining <= 0:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise asyncio.TimeoutError
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=min(remaining, 0.2))
+                except asyncio.TimeoutError:
+                    continue
+            return task.result()
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
     def _build_llm(self, browser_use: Any) -> Any:
         if self.browser_api_key:
@@ -1265,6 +1608,7 @@ class BrowserUseSourceAdapter:
 # 友好别名便于发现，同时保持应用 wiring 使用的显式名称。
 GitHubAdapter = GitHubSourceAdapter
 BrowserUseAdapter = BrowserUseSourceAdapter
+HackerNewsAdapter = HackerNewsSourceAdapter
 FeedSourceAdapter = RSSSourceAdapter
 RssSourceAdapter = RSSSourceAdapter
 RSSAdapter = RSSSourceAdapter
@@ -1278,6 +1622,8 @@ __all__ = [
     "BrowserUseSourceAdapter",
     "GitHubAdapter",
     "GitHubSourceAdapter",
+    "HackerNewsAdapter",
+    "HackerNewsSourceAdapter",
     "FeedSourceAdapter",
     "RssSourceAdapter",
     "RSSAdapter",

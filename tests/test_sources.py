@@ -11,7 +11,13 @@ from unittest.mock import patch
 
 from datetime import datetime, timezone
 
-from signal_radar.sources import BrowserRecord, BrowserUseSourceAdapter, GitHubSourceAdapter, RSSSourceAdapter
+from signal_radar.sources import (
+    BrowserRecord,
+    BrowserUseSourceAdapter,
+    GitHubSourceAdapter,
+    HackerNewsSourceAdapter,
+    RSSSourceAdapter,
+)
 
 
 class _Response:
@@ -38,6 +44,37 @@ class _Response:
 
 
 class SourceAdapterTests(unittest.TestCase):
+    HN_JSON = {
+        "hits": [
+            {
+                "objectID": "123",
+                "title": "browser-use release discussion",
+                "url": "https://example.com/post",
+                "author": "alice",
+                "created_at": "2026-09-29T10:00:00.000Z",
+                "points": 42,
+                "num_comments": 8,
+                "story_text": "The new browser-use release fixes timeout errors.",
+                "_tags": ["story"],
+            },
+            {
+                "objectID": "124",
+                "story_id": "123",
+                "story_title": "browser-use release discussion",
+                "author": "bob",
+                "created_at": "2026-01-01T10:00:00.000Z",
+                "comment_text": "The old version is slow.",
+                "_tags": ["comment"],
+            },
+            {
+                "objectID": "125",
+                "title": "Metadata-only mention",
+                "created_at": "2026-09-28T10:00:00.000Z",
+                "_tags": ["story"],
+            },
+        ]
+    }
+
     RSS_XML = """<?xml version="1.0" encoding="UTF-8"?>
     <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
       <channel>
@@ -92,6 +129,47 @@ class SourceAdapterTests(unittest.TestCase):
         self.assertEqual(result.evidence[0].evidence_level, "full_text")
         self.assertEqual(requests[0][0], "https://blog.example.com/feed.xml")
         self.assertGreater(requests[0][1], 0)
+
+    def test_hackernews_maps_public_hits_and_filters_since(self) -> None:
+        requests = []
+
+        def opener(request, timeout):
+            requests.append((request.full_url, timeout))
+            return _Response(self.HN_JSON)
+
+        result = HackerNewsSourceAdapter(opener=opener).collect(
+            "browser-use", limit=10, since=datetime(2026, 9, 1, tzinfo=timezone.utc)
+        )
+        self.assertEqual(result.status.status, "ok")
+        self.assertEqual(result.status.source, "Hacker News")
+        self.assertEqual(len(result.articles), 2)
+        self.assertEqual(result.articles[0].metadata["collector"], "hackernews_algolia")
+        self.assertEqual(result.articles[0].source_type, "community")
+        self.assertEqual(result.evidence[0].evidence_level, "full_text")
+        self.assertEqual(result.evidence[1].evidence_level, "metadata_only")
+        self.assertIn("tags=story%2Ccomment", requests[0][0])
+        self.assertIn("numericFilters=created_at_i%3E%3D", requests[0][0])
+        self.assertGreater(requests[0][1], 0)
+
+    def test_hackernews_requires_query_and_surfaces_http_failures(self) -> None:
+        missing = HackerNewsSourceAdapter(opener=lambda *_args, **_kwargs: _Response(self.HN_JSON)).collect("")
+        self.assertEqual(missing.status.error, "missing_query")
+
+        def opener(_request, timeout):
+            raise TimeoutError("timed out")
+
+        failed = HackerNewsSourceAdapter(opener=opener).collect("browser-use")
+        self.assertEqual(failed.status.status, "error")
+        self.assertIn("timed out", failed.status.error or "")
+
+        def rate_limited_opener(_request, timeout):
+            response = _Response({"message": "slow down"})
+            response.status = 429
+            return response
+
+        limited = HackerNewsSourceAdapter(opener=rate_limited_opener).collect("browser-use")
+        self.assertEqual(limited.status.status, "rate_limited")
+        self.assertEqual(limited.status.access_status, "rate_limited")
 
     def test_atom_adapter_maps_namespaces_and_deduplicates(self) -> None:
         payloads = {"https://example.com/atom.xml": self.ATOM_XML}

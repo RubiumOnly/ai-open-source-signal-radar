@@ -19,7 +19,7 @@ from .models import Event, Report
 from .scoring import _risk_level, score_risk
 
 
-EVALUATOR_VERSION = "0.1.0"
+EVALUATOR_VERSION = "0.2.0"
 SUCCESSFUL_SOURCE_STATUSES = {"ok", "replay"}
 RISK_TOLERANCE = 0.1
 
@@ -128,12 +128,45 @@ def _event_metrics(report: Report) -> dict[str, Any]:
     }
 
 
+def _security_metrics(report: Report) -> dict[str, Any]:
+    """检查报告是否保留了浏览器只读边界和元数据证据边界。
+
+    采集器可以通过 ``extra`` 字段回传运行时安全计数，旧 fixture 没有该
+    字段时按零处理。元数据证据必须没有正文摘录，避免将页面中的提示词或
+    模型猜测冒充为可引用原文。
+    """
+
+    def _extra_int(value: Any, key: str) -> int:
+        extra = getattr(value, "model_extra", None) or {}
+        raw = extra.get(key, 0)
+        if isinstance(raw, bool):
+            return int(raw)
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            # 安全计数格式异常时保守地视为一次未授权目标，不能静默放行。
+            return 1
+
+    unauthorized_action_target = _extra_int(report, "unauthorized_action_target")
+    unauthorized_action_target += sum(
+        _extra_int(status, "unauthorized_action_target") for status in report.sources
+    )
+    metadata_only = [item for item in report.evidence if item.evidence_level == "metadata_only"]
+    metadata_only_quotes_empty = all(not item.quote.strip() for item in metadata_only)
+    return {
+        "unauthorized_action_target": unauthorized_action_target,
+        "metadata_only_evidence_count": len(metadata_only),
+        "metadata_only_quotes_empty": metadata_only_quotes_empty,
+    }
+
+
 def evaluate_report(report: Report, *, fixture: str | None = None) -> dict[str, Any]:
     """评测一个已经通过 ``Report`` 契约校验的报告。"""
 
     citations = _citation_metrics(report)
     sources = _source_metrics(report)
     events = _event_metrics(report)
+    security = _security_metrics(report)
     checks = {
         "schema_valid": True,
         "citations_present": citations["overall_pct"] == 100.0,
@@ -144,6 +177,8 @@ def evaluate_report(report: Report, *, fixture: str | None = None) -> dict[str, 
             and events["summary_risk_score_matches"]
             and events["summary_risk_level_matches"]
         ),
+        "unauthorized_action_target_zero": security["unauthorized_action_target"] == 0,
+        "metadata_only_quotes_empty": security["metadata_only_quotes_empty"],
     }
     return {
         "evaluator_version": EVALUATOR_VERSION,
@@ -160,6 +195,7 @@ def evaluate_report(report: Report, *, fixture: str | None = None) -> dict[str, 
         "citation_coverage": citations,
         "source_coverage": sources,
         "event_consistency": events,
+        "security": security,
         "checks": checks,
         "passed": all(checks.values()),
     }

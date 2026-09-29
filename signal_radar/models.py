@@ -41,6 +41,7 @@ SourceRunStatus = Literal[
     "rate_limited",
     "unavailable",
     "error",
+    "cancelled",
 ]
 Sentiment = Literal["positive", "negative", "neutral", "mixed", "unknown"]
 Stance = Literal["support", "supportive", "oppose", "against", "uncertain", "mixed", "neutral"]
@@ -187,6 +188,13 @@ class Report(ContractModel):
     events: list[Event] = Field(default_factory=list)
 
 
+class RunBudget(ContractModel):
+    """单次运行可观察、可校验的资源预算。"""
+
+    max_steps: int = Field(default=12, ge=1, le=40)
+    timeout_seconds: float = Field(default=180.0, gt=0.0, le=900.0)
+
+
 class RunRequest(ContractModel):
     mode: Literal["replay", "live"] = "replay"
     subject: str = "browser-use/browser-use"
@@ -197,9 +205,16 @@ class RunRequest(ContractModel):
     limit: int = Field(default=20, ge=1, le=100)
     sources: list[str] = Field(default_factory=lambda: ["github"])
     source: str | None = None
+    community_query: str | None = None
     urls: list[str] = Field(default_factory=list)
     feed_urls: list[str] = Field(default_factory=list)
     fixture: str | None = None
+    # Live Browser Use 的运行级预算；不传时沿用服务端适配器默认值。
+    max_steps: int | None = Field(default=None, ge=1, le=40)
+    timeout_seconds: float | None = Field(default=None, gt=0.0, le=900.0)
+    budget: RunBudget | None = None
+    # 允许客户端在异步取消前预先指定一个可追踪的运行 ID。
+    run_id: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class Run(ContractModel):
@@ -207,7 +222,7 @@ class Run(ContractModel):
     # ``id`` 兼容使用短任务契约的客户端。
     id: str | None = None
     mode: Literal["replay", "live"] = "replay"
-    status: Literal["queued", "running", "completed", "partial", "failed"] = "completed"
+    status: Literal["queued", "running", "completed", "partial", "failed", "cancelled"] = "completed"
     subject: str = ""
     window_days: int = Field(default=7, ge=1, le=3650)
     started_at: datetime = Field(default_factory=utc_now)
@@ -215,6 +230,8 @@ class Run(ContractModel):
     report_id: str | None = None
     source_statuses: list[SourceStatus] = Field(default_factory=list)
     error: str | None = None
+    budget: RunBudget = Field(default_factory=RunBudget)
+    cancel_requested: bool = False
 
     @model_validator(mode="after")
     def sync_ids(self) -> "Run":
@@ -233,7 +250,7 @@ class RunResponse(ContractModel):
 class HealthResponse(ContractModel):
     status: Literal["ok", "degraded"]
     service: str = "signal-radar"
-    version: str = "0.1.0"
+    version: str = "0.2.0"
     replay_available: bool = True
 
 

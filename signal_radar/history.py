@@ -54,6 +54,8 @@ def report_to_markdown(report: Report, run: Run | None = None) -> str:
             f"- 运行状态：**{run.status}**",
             f"- 开始时间：{run.started_at.isoformat()}",
             f"- 完成时间：{run.completed_at.isoformat() if run.completed_at else '未完成'}",
+            f"- 运行预算：最多 {run.budget.max_steps} 步，{run.budget.timeout_seconds:.1f} 秒",
+            f"- 取消请求：{'是' if run.cancel_requested else '否'}",
         ])
         if run.error:
             lines.append(f"- 错误：`{_markdown_text(run.error)}`")

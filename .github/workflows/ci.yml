@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev,api]"
+      - run: python -m pytest -q
+      - run: python -m unittest discover -s tests -v
+      - run: python -m compileall -q signal_radar tests
+      - run: python -m signal_radar.evaluate --fixture fixtures/demo_report.json --output evaluation.json
+      - run: python -c "import json; data=json.load(open('evaluation.json', encoding='utf-8')); assert data['passed']"
+      - run: python -m pip check
+      - run: node --check web/app.js

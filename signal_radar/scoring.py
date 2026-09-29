@@ -76,7 +76,7 @@ def score_risk(
     source_penalty = sum(
         8.0
         for status in source_statuses
-        if status.status in {"partial", "error", "blocked", "rate_limited", "auth_required"}
+        if status.status in {"partial", "error", "blocked", "rate_limited", "auth_required", "cancelled"}
     )
     return round(max(0.0, min(100.0, event_score * 0.72 + claim_score * 0.2 + source_penalty)), 1)
 
