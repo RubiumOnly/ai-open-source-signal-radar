@@ -4,7 +4,7 @@
 
 项目的目标不是宣称“抓取全网舆情”，也不是把 GitHub 代码当成舆情。GitHub Issues、Discussions、Pull Requests 和 Releases 代表项目参与者的反馈与维护状态；外部网站用于补充使用体验。报告会区分**事实、观点、统计信号和推断**，并在证据不足时明确标注不确定性。
 
-## 适合展示的场景
+## 典型使用场景
 
 输入一个项目和时间窗口，例如：
 
@@ -70,7 +70,7 @@ Copy-Item .env.example .env
 
 ### Replay 模式（无需网络和 API Key）
 
-Replay 使用 `fixtures/demo_report.json`，适合仓库内本地演示、面试演示和离线测试：
+Replay 使用 `fixtures/demo_report.json`，适合仓库内本地演示、首次体验和离线测试：
 
 ```powershell
 python -m signal_radar --mode replay --fixture fixtures/demo_report.json
@@ -80,10 +80,10 @@ python -m signal_radar --mode replay --fixture fixtures/demo_report.json
 
 ### Live 模式
 
-Live 模式需要配置模型和来源凭据，并应在本地或受控后端运行：
+Live CLI 会读取 GitHub 的公开 Releases 和 Issues；GitHub Token 不是必需项，但可用于提高 API 速率限制。需要 Browser Use 动态采集时，请使用后面的 API 配置，并在本地或受控后端运行：
 
 ```powershell
-python -m signal_radar --mode live --project browser-use/browser-use --days 30
+python -m signal_radar --mode live --project browser-use/browser-use --days 30 --source github
 ```
 
 具体命令以 `python -m signal_radar --help` 为准。没有凭据时请使用 Replay，不要把 Key 写入前端或提交到 Git。
@@ -127,6 +127,14 @@ Invoke-RestMethod http://localhost:8000/api/run -Method Post -ContentType "appli
   window_days = 30
   limit = 5
 } | ConvertTo-Json)
+```
+
+也可以使用 CLI 触发动态来源。必须同时显式开启适配器和实时执行，并重复传入需要访问的 URL：
+
+```powershell
+python -m signal_radar --mode live --project browser-use/browser-use --source browser_use `
+  --url https://github.com/browser-use/browser-use/discussions `
+  --enable-browser-use --browser-run-live --limit 5
 ```
 
 本地运行时请将 `.env` 中的变量导出到当前进程（或安装 `.[live]` 后由应用加载）；Docker Compose 会通过 `env_file` 自动传入这些变量。
@@ -174,7 +182,7 @@ pytest -q
 
 ## 运行、展示与部署
 
-GitHub 仓库是本项目的主交付物：源码、测试、fixture 和运行文档都应能被面试官直接 clone 后复现。推荐先运行 Replay，再说明如何切换 Live。`web/` 只是仓库内的本地 Dashboard，不承担 Python Agent、Chromium 或 API Key。
+GitHub 仓库包含完整源码、测试、fixture 和运行文档。推荐先运行 Replay，再切换到 Live；`web/` 是仓库内的本地 Dashboard，不承担 Python Agent、Chromium 或 API Key。
 
 推荐拆分为：
 
@@ -183,7 +191,7 @@ GitHub 仓库是本项目的主交付物：源码、测试、fixture 和运行�
 3. 如需对外展示，可单独托管 `web/` 的 Replay 静态文件，但这不是项目运行前提；
 4. 前端通过环境变量配置后端地址，绝不把模型 Key 放进浏览器包。
 
-面试演示建议按以下顺序：
+建议按以下顺序启动一个本地运行：
 
 ```text
 git clone <repo>
@@ -191,7 +199,7 @@ pip install -e ".[dev]"
 python -m signal_radar --mode replay --fixture fixtures/demo_report.json
 ```
 
-随后展示源码、契约测试、fixture、架构图，再解释 Live 模式的模型、浏览器会话、权限边界和失败降级。Live 按钮应明确提示网络、成本和来源访问限制。
+随后可以查看源码、契约测试、fixture、架构图，以及 Live 模式的模型、浏览器会话、权限边界和失败降级。Live 运行应明确提示网络、成本和来源访问限制。
 
 ### Docker（Replay API）
 
@@ -215,6 +223,12 @@ fixtures/           离线演示和评测输入
 tests/              不需要网络/API Key 的契约与单元测试
 ```
 
+## 参与与安全
+
+- 贡献流程见 [`CONTRIBUTING.md`](CONTRIBUTING.md)；
+- 凭据、浏览器权限和漏洞报告规则见 [`SECURITY.md`](SECURITY.md)；
+- 版本变化见 [`CHANGELOG.md`](CHANGELOG.md)。
+
 ## 路线图
 
 - MVP：GitHub Releases/Issues、确定性风险评分和 Browser Use 的显式动态页面适配器；
@@ -224,7 +238,7 @@ tests/              不需要网络/API Key 的契约与单元测试
 - 增加网页 Prompt Injection 防护、域名白名单、成本预算和失败恢复；
 - 建立带人工标注的回归评测集。
 
-## 面试讲解要点
+## 设计与工程要点
 
-面试时可以明确说明：GitHub 是高质量的开发者反馈源，不等于大众舆情；Browser Use 仅用于需要浏览器的动态任务；API、权限边界、证据引用、失败降级和离线评测比“成功点开网页一次”更重要。
+GitHub 是高质量的开发者反馈源，但不等于大众舆情；Browser Use 仅用于需要浏览器的动态任务。API、权限边界、证据引用、失败降级和离线评测共同决定报告是否可信。
 
