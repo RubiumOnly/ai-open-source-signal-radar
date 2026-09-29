@@ -5,6 +5,8 @@ __pycache__/
 *.egg-info/
 .env
 reports/
+data/
+artifacts/
 reports-test.json
 dist/
 build/

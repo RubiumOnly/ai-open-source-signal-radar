@@ -14,6 +14,7 @@ from .models import (
     RunRequest,
     SourceStatus,
 )
+from .history import HistoryStore, RunHistoryStore, SQLiteHistoryStore, report_to_markdown
 from .sources import (
     BrowserExtraction,
     BrowserRecord,
@@ -52,6 +53,10 @@ __all__ = [
     "SourceFetchResult",
     "BrowserExtraction",
     "BrowserRecord",
+    "HistoryStore",
+    "SQLiteHistoryStore",
+    "RunHistoryStore",
+    "report_to_markdown",
     "__version__",
 ]
 

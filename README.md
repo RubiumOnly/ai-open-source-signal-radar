@@ -213,6 +213,36 @@ python -m unittest discover -s tests -v
 pytest -q
 ```
 
+### 离线报告评测
+
+评测 harness 读取固定 JSON fixture，不访问网络、模型或浏览器。它会分别检查
+报告契约、证据引用覆盖率、来源可用率、事件计数，以及事件/汇总风险分数的一致性：
+
+```powershell
+python -m signal_radar.evaluate `
+  --fixture fixtures/demo_report.json `
+  --output reports/evaluation-demo.json
+```
+
+输出是可复现的 JSON，主要字段包括 `schema_valid`、`citation_coverage`、
+`source_coverage`、`event_consistency`、`checks` 和 `passed`。`schema_valid=true`
+只表示 fixture 能通过 `Report` 契约校验；如果历史 fixture 的汇总数字与明细不一致，
+评测会保留该报告并将对应一致性检查标为 `false`，不会静默回退到演示数据。输入 JSON
+无法解析时命令返回非零退出码，并在 `schema_errors` 中给出可读原因。
+`fixtures/evaluation_inconsistent.json` 是一个专门用于验证失败检测的最小样例。
+
+### 运行历史与报告导出
+
+API 默认将运行记录和报告快照保存到 `data/runs.sqlite3`；`data/` 已加入 `.gitignore`，不会进入仓库。也可以通过 `SIGNAL_RADAR_HISTORY_DB` 指定数据库路径。
+
+```text
+GET  /api/runs?limit=20&offset=0
+GET  /api/runs/{run_id}
+GET  /api/runs/{run_id}/markdown
+```
+
+Markdown 导出包含摘要、关键事件、主题、证据和来源状态，适合归档或二次编辑。测试环境可以向 `create_app(history_store=HistoryStore(":memory:"))` 注入内存存储。
+
 ## 运行、展示与部署
 
 GitHub 仓库包含完整源码、测试、fixture 和运行文档。推荐先运行 Replay，再切换到 Live；`web/` 是仓库内的本地 Dashboard，不承担 Python Agent、Chromium 或 API Key。
@@ -223,6 +253,14 @@ GitHub 仓库包含完整源码、测试、fixture 和运行文档。推荐先�
 2. `web/`：可选的静态 Dashboard，默认加载 `fixtures/demo_report.json`；
 3. 如需对外展示，可单独托管 `web/` 的 Replay 静态文件，但这不是项目运行前提；
 4. 前端通过环境变量配置后端地址，绝不把模型 Key 放进浏览器包。
+
+## Dashboard 预览
+
+下面是本地 Replay API 加载真实 fixture 后生成的截图，桌面和移动视口均已验证：
+
+![桌面 Dashboard 预览](docs/images/signal-radar-dashboard-desktop.png)
+
+![移动 Dashboard 预览](docs/images/signal-radar-dashboard-mobile.png)
 
 建议按以下顺序启动一个本地运行：
 
@@ -251,8 +289,10 @@ docker compose up --build
 
 ```text
 signal_radar/       后端编排、来源适配器、报告模型
+docs/images/        README 使用的真实 Dashboard 截图
 web/                仓库内本地 Dashboard（可选静态 Replay 展示）
 fixtures/           离线演示和评测输入
+data/               本地 SQLite 运行历史（默认不提交）
 tests/              不需要网络/API Key 的契约与单元测试
 ```
 

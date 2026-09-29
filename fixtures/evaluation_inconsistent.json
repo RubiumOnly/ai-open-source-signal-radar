@@ -1,0 +1,21 @@
+{
+  "project": {"name": "fixture-check", "repository": "example/fixture-check"},
+  "summary": {
+    "risk_score": 0,
+    "risk_level": "low",
+    "events_count": 0,
+    "source_count": 0,
+    "coverage_pct": 100
+  },
+  "evidence": [],
+  "sources": [],
+  "events": [
+    {
+      "id": "event-inconsistent",
+      "title": "故意不一致的事件",
+      "risk_level": "high",
+      "risk_score": 80,
+      "evidence_ids": []
+    }
+  ]
+}

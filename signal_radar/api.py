@@ -18,6 +18,7 @@ from .models import (
     RunResponse,
     SourceStatus,
 )
+from .history import DEFAULT_HISTORY_PATH, HistoryStore
 from .repository import FixtureReportRepository, load_fixture_report
 from .scoring import aggregate_report
 from .sources import BrowserUseSourceAdapter, GitHubSourceAdapter, RSSSourceAdapter, SourceFetchResult
@@ -195,6 +196,7 @@ def create_app(
     github_adapter: GitHubSourceAdapter | None = None,
     browser_adapter: BrowserUseSourceAdapter | None = None,
     rss_adapter: RSSSourceAdapter | None = None,
+    history_store: HistoryStore | None = None,
 ) -> Any:
     """构建支持注入存储和适配器的应用，便于测试。"""
 
@@ -219,6 +221,9 @@ def create_app(
             if item.strip()
         ),
     )
+    history_store = history_store or HistoryStore(
+        os.getenv("SIGNAL_RADAR_HISTORY_DB") or DEFAULT_HISTORY_PATH
+    )
     service = FastAPI(title="Signal Radar API", version=SERVICE_VERSION)
     # API 默认只读。宽松策略便于本地/静态仪表盘使用，部署时可收窄来源。
     service.add_middleware(
@@ -229,6 +234,7 @@ def create_app(
     )
     service.state.latest_report = None
     service.state.latest_run = None
+    service.state.history_store = history_store
 
     @service.get("/api/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -255,6 +261,44 @@ def create_app(
     def sources() -> list[SourceStatus]:
         report_value = service.state.latest_report or repository.get_report()
         return report_value.sources
+
+    @service.get("/api/runs", response_model=list[Run])
+    def runs(
+        limit: int = Query(default=20, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[Run]:
+        return history_store.list(limit=limit, offset=offset)
+
+    @service.get("/api/runs/{run_id}", response_model=RunResponse)
+    def run_detail(run_id: str) -> RunResponse:
+        response = history_store.get(run_id)
+        if response is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        return response
+
+    def markdown_export(run_id: str) -> Any:
+        from fastapi.responses import PlainTextResponse
+
+        markdown = history_store.markdown(run_id)
+        if markdown is None:
+            raise HTTPException(status_code=404, detail="report not found for run")
+        return PlainTextResponse(markdown, media_type="text/markdown; charset=utf-8")
+
+    service.add_api_route(
+        "/api/runs/{run_id}/markdown",
+        markdown_export,
+        methods=["GET"],
+        response_class=None,
+        name="run_markdown",
+    )
+    service.add_api_route(
+        "/api/runs/{run_id}/report.md",
+        markdown_export,
+        methods=["GET"],
+        response_class=None,
+        include_in_schema=False,
+        name="run_report_markdown",
+    )
 
     def execute(payload: RunRequest) -> RunResponse:
         run_id = _run_id()
@@ -301,6 +345,7 @@ def create_app(
         )
         service.state.latest_run = run
         service.state.latest_report = report_value
+        history_store.save(run, report_value)
         return RunResponse(run=run, report=report_value)
 
     @service.post("/api/run", response_model=RunResponse)

@@ -10,9 +10,9 @@
   "generated_at": "2026-09-29T08:00:00Z",
   "window_days": 30,
   "summary": {
-    "risk_score": 62,
-    "risk_level": "high",
-    "events_count": 8,
+    "risk_score": 49.0,
+    "risk_level": "medium",
+    "events_count": 1,
     "source_count": 4,
     "coverage_pct": 78.0
   },
@@ -206,7 +206,12 @@
       "id": "event:release-079",
       "type": "release",
       "title": "0.7.9 发布",
-      "date": "2026-09-25",
+      "category": "release",
+      "summary": "版本说明提到浏览器会话重试和结构化输出改进。",
+      "risk_level": "high",
+      "risk_score": 68,
+      "sentiment": "negative",
+      "occurred_at": "2026-09-25T09:30:00Z",
       "evidence_ids": ["ev-001"]
     }
   ]

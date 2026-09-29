@@ -1,0 +1,265 @@
+"""SQLite-backed run history and deterministic report exports.
+
+The history store intentionally uses only the Python standard library.  Run
+and report payloads are stored as JSON so the persisted representation follows
+the public Pydantic contracts without duplicating every nested field in SQL.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from .models import Report, Run, RunResponse
+
+
+DEFAULT_HISTORY_PATH = Path(__file__).resolve().parent.parent / "data" / "runs.sqlite3"
+
+
+def _json_datetime(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _markdown_text(value: Any) -> str:
+    """Keep user/source text from accidentally becoming Markdown structure."""
+
+    return " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())
+
+
+def report_to_markdown(report: Report, run: Run | None = None) -> str:
+    """Render a compact, citation-oriented Markdown report without extra deps."""
+
+    project = report.project
+    summary = report.summary
+    lines = [
+        f"# Signal Radar: {_markdown_text(project.name)}",
+        "",
+        f"- 项目：`{_markdown_text(project.repository)}`",
+        f"- 运行 ID：`{_markdown_text(run.run_id if run else report.run_id or '')}`",
+        f"- 生成时间：{report.generated_at.isoformat()}",
+        f"- 分析窗口：{report.window_days} 天",
+        "",
+        "## 摘要",
+        "",
+        f"- 风险等级：**{summary.risk_level}**",
+        f"- 风险分数：{summary.risk_score:.1f}/100",
+        f"- 事件数：{summary.events_count}",
+        f"- 来源数：{summary.source_count}",
+        f"- 证据覆盖率：{summary.coverage_pct:.1f}%",
+    ]
+    if run is not None:
+        lines.extend([
+            f"- 运行状态：**{run.status}**",
+            f"- 开始时间：{run.started_at.isoformat()}",
+            f"- 完成时间：{run.completed_at.isoformat() if run.completed_at else '未完成'}",
+        ])
+        if run.error:
+            lines.append(f"- 错误：`{_markdown_text(run.error)}`")
+
+    if report.events:
+        lines.extend(["", "## 关键事件", ""])
+        for event in report.events:
+            title = _markdown_text(event.title) or event.id
+            lines.append(
+                f"- **{title}**（{event.risk_level}, {event.risk_score:.1f}）"
+                f"：{_markdown_text(event.summary) or '暂无摘要'}"
+            )
+
+    if report.topics:
+        lines.extend(["", "## 主题", "", "| 主题 | 数量 | 情绪 | 风险 |", "| --- | ---: | --- | ---: |"])
+        for topic in report.topics:
+            lines.append(
+                f"| {_markdown_text(topic.name)} | {topic.count} | {topic.sentiment} | {topic.risk_score:.1f} |"
+            )
+
+    if report.evidence:
+        lines.extend(["", "## 证据", ""])
+        for evidence in report.evidence:
+            title = _markdown_text(evidence.title) or evidence.id
+            quote = _markdown_text(evidence.quote) or "（无可核验摘录）"
+            lines.append(
+                f"- **{title}**（{evidence.source}, {evidence.evidence_level}, "
+                f"置信度 {evidence.confidence:.2f}）"
+            )
+            lines.append(f"  - 摘录：{quote}")
+            lines.append(f"  - 来源：[打开原文]({evidence.url})")
+
+    if report.sources:
+        lines.extend(["", "## 来源状态", ""])
+        for source in report.sources:
+            detail = _markdown_text(source.detail or source.error or "")
+            suffix = f"：{detail}" if detail else ""
+            lines.append(f"- **{source.source}**：{source.status}，记录 {source.records}{suffix}")
+
+    if report.access_status:
+        lines.extend(["", "## 访问边界", ""])
+        for access in report.access_status:
+            reason = f"：{_markdown_text(access.reason)}" if access.reason else ""
+            lines.append(f"- **{access.source}**：{access.status}，证据级别 {access.evidence_level}{reason}")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+class HistoryStore:
+    """Persist completed and failed runs in a small SQLite database.
+
+    A fresh connection is used per operation for file-backed databases, which
+    keeps the store safe when FastAPI dispatches synchronous handlers across
+    worker threads. ``:memory:`` is supported for isolated tests.
+    """
+
+    def __init__(self, path: str | Path = DEFAULT_HISTORY_PATH):
+        self.path = str(path)
+        self._memory_connection: sqlite3.Connection | None = None
+        if self.path == ":memory:":
+            self._memory_connection = self._connect()
+        else:
+            db_path = Path(self.path).expanduser()
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.path = str(db_path)
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    def _connection(self) -> sqlite3.Connection:
+        return self._memory_connection or self._connect()
+
+    def _initialize(self) -> None:
+        connection = self._connection()
+        try:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runs (
+                    run_id TEXT PRIMARY KEY,
+                    mode TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    window_days INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    report_id TEXT,
+                    error TEXT,
+                    run_json TEXT NOT NULL,
+                    report_json TEXT
+                )
+                """
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC)")
+            connection.commit()
+        finally:
+            if connection is not self._memory_connection:
+                connection.close()
+
+    def save(self, run: Run, report: Report | None = None) -> Run:
+        """Insert or replace a run, including its optional report snapshot."""
+
+        run_json = run.model_dump_json(exclude_none=False)
+        report_json = report.model_dump_json(exclude_none=False) if report is not None else None
+        connection = self._connection()
+        try:
+            connection.execute(
+                """
+                INSERT INTO runs (
+                    run_id, mode, status, subject, window_days, started_at,
+                    completed_at, report_id, error, run_json, report_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    mode=excluded.mode,
+                    status=excluded.status,
+                    subject=excluded.subject,
+                    window_days=excluded.window_days,
+                    started_at=excluded.started_at,
+                    completed_at=excluded.completed_at,
+                    report_id=excluded.report_id,
+                    error=excluded.error,
+                    run_json=excluded.run_json,
+                    report_json=excluded.report_json
+                """,
+                (
+                    run.run_id,
+                    run.mode,
+                    run.status,
+                    run.subject,
+                    run.window_days,
+                    _json_datetime(run.started_at),
+                    _json_datetime(run.completed_at),
+                    run.report_id,
+                    run.error,
+                    run_json,
+                    report_json,
+                ),
+            )
+            connection.commit()
+        finally:
+            if connection is not self._memory_connection:
+                connection.close()
+        return run
+
+    # Verbose aliases keep the storage contract discoverable to callers while
+    # retaining the short methods used by the API handlers.
+    save_run = save
+
+    def _row_to_response(self, row: sqlite3.Row) -> RunResponse:
+        run = Run.model_validate_json(row["run_json"])
+        report_json = row["report_json"]
+        report = Report.model_validate_json(report_json) if report_json else None
+        return RunResponse(run=run, report=report)
+
+    def list(self, *, limit: int = 20, offset: int = 0) -> list[Run]:
+        limit = max(1, min(int(limit), 100))
+        offset = max(0, int(offset))
+        connection = self._connection()
+        try:
+            rows = connection.execute(
+                "SELECT run_json FROM runs ORDER BY julianday(started_at) DESC, run_id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            return [Run.model_validate_json(row["run_json"]) for row in rows]
+        finally:
+            if connection is not self._memory_connection:
+                connection.close()
+
+    list_runs = list
+
+    def get(self, run_id: str) -> RunResponse | None:
+        connection = self._connection()
+        try:
+            row = connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+            return self._row_to_response(row) if row is not None else None
+        finally:
+            if connection is not self._memory_connection:
+                connection.close()
+
+    get_run = get
+
+    def markdown(self, run_id: str) -> str | None:
+        response = self.get(run_id)
+        if response is None or response.report is None:
+            return None
+        return report_to_markdown(response.report, response.run)
+
+    get_markdown = markdown
+
+    def close(self) -> None:
+        if self._memory_connection is not None:
+            self._memory_connection.close()
+            self._memory_connection = None
+
+
+SQLiteHistoryStore = HistoryStore
+RunHistoryStore = HistoryStore
+
+__all__ = [
+    "DEFAULT_HISTORY_PATH",
+    "HistoryStore",
+    "SQLiteHistoryStore",
+    "RunHistoryStore",
+    "report_to_markdown",
+]
