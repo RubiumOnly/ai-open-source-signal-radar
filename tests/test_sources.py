@@ -250,7 +250,9 @@ class SourceAdapterTests(unittest.TestCase):
             session = adapter._build_session(fake_module, ["https://csdn.net/article/1"])
             self.assertEqual(session.kwargs["user_data_dir"], directory)
             self.assertEqual(session.kwargs["profile_directory"], "Default")
-            self.assertTrue(adapter.availability()["available"])
+            # browser-use 是可选依赖；能力探针在单测中使用 fake module，避免要求安装 Live 依赖。
+            with patch.dict(sys.modules, {"browser_use": fake_module}):
+                self.assertTrue(adapter.availability()["available"])
 
     def test_browser_use_profile_requires_explicit_authorization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
