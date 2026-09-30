@@ -15,6 +15,7 @@
 
 ## Unreleased
 
+- 重构项目文档入口：README 聚焦定位、快速开始、能力边界与文档导航；新增 `docs/USAGE.md`、`docs/API.md` 和 `docs/EVALUATION.md`，将来源配置、API 契约和评测说明拆分为可查阅的专项文档；
 - 补齐报告 JSON 导出：工作台复用受保护的运行详情接口，导出运行状态、预算和结构化报告，与 Markdown 归档入口并列；
 - 修复 Replay 预览导出边界：预览报告可直接导出 JSON 快照，Markdown 按钮仅对已持久化运行启用并给出明确提示；
 - 完成人工复核前端闭环：证据卡片支持正确性、风险和立场标注，记录复核者与备注、回显已有标注并导出 JSON；沿用 Bearer Token 和 SQLite 标注 API，不改写原始报告；
