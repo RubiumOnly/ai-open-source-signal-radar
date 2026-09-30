@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import unittest
+import time
 
 from signal_radar.api import _live_report
 from signal_radar.api import create_app
@@ -53,6 +54,30 @@ class _FakeHackerNews:
 
 
 class LiveOrchestrationTests(unittest.TestCase):
+    def test_requested_sources_are_collected_with_a_shared_deadline(self) -> None:
+        class Slow:
+            def __init__(self, source: str) -> None:
+                self.source = source
+                self.feed_urls = ()
+
+            def collect(self, *args, **kwargs):
+                time.sleep(0.12)
+                return SourceFetchResult(
+                    status=SourceStatus(source=self.source, source_type="community", status="ok", records=0)
+                )
+
+        started = time.perf_counter()
+        _live_report(
+            RunRequest(mode="live", project="org/repo", sources=["github", "rss", "hackernews"]),
+            run_id="run-parallel",
+            github=Slow("GitHub"),
+            browser=_FakeBrowser(),
+            rss=Slow("RSS/Atom"),
+            hackernews=Slow("Hacker News"),
+        )
+        elapsed = time.perf_counter() - started
+        self.assertLess(elapsed, 0.28)
+
     def test_fixture_endpoint_rejects_paths_outside_fixture_roots(self) -> None:
         from fastapi.testclient import TestClient
 

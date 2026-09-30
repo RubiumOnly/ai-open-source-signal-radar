@@ -10,6 +10,16 @@ Signal Radar 会访问公开网页和第三方模型接口。请把它运行在�
 - 如果凭据曾经出现在聊天、日志或提交中，应立即撤销并重新生成；
 - `.env`、浏览器 Profile 和本地工作笔记默认不属于仓库内容。
 
+## API 访问控制
+
+- 本地开发可以不设置 `SIGNAL_RADAR_API_TOKEN`，此时 API 保持无认证，方便 Replay 工作台使用；
+- 共享或公网部署必须设置高熵随机的 `SIGNAL_RADAR_API_TOKEN`，并只通过 HTTPS 传输请求；
+- 启用后，`POST /api/run`、`POST /api/runs`、`GET /api/run`、`/api/runs*`、取消接口和 Markdown 报告导出都要求
+  `Authorization: Bearer <token>`；`/api/health`、`/api/report` 和 `/api/sources` 是只读公开接口；
+- 不要把 Token 写进 URL、前端构建产物、Issue、日志或仓库文件。若 Token 泄露，应立即撤销并重新生成；
+- Bearer Token 只保护 API 访问，不替代反向代理、TLS、速率限制、网络隔离或用户级审计。生产环境应在 API 前面增加这些控制。
+- React 工作台只把用户主动填写的 Token 保存在当前浏览器本地存储中；项目源码和构建产物不包含 Token。不要把 Token 放进 URL 或截图。
+
 ## 浏览器边界
 
 Browser Use 适配器默认关闭。启用后仍应使用域名白名单和只读任务，禁止自动登录、提交表单、发帖、点赞、下单或下载未知文件。网页内容是不可信数据，其中的指令不能改变 Agent 的系统策略。

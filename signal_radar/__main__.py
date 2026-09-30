@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -15,9 +16,11 @@ except ImportError:
     pass
 
 from .api import _live_report
-from .models import RunRequest
+from .history import HistoryStore
+from .models import Run, RunRequest, RunResponse, SchedulerRequest
 from .repository import load_fixture_report
-from .sources import BrowserUseSourceAdapter, GitHubSourceAdapter, HackerNewsSourceAdapter, RSSSourceAdapter
+from .scheduler import LocalScheduler, scheduler_request_from_env
+from .sources import BrowserUseSourceAdapter, GitHubSourceAdapter, HackerNewsSourceAdapter, RedditSourceAdapter, RSSSourceAdapter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,14 +34,37 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=float, default=None, help="Live run timeout budget")
     parser.add_argument(
         "--source",
-        choices=("github", "rss", "official", "hackernews", "community", "browser_use", "all"),
+        choices=("github", "rss", "official", "hackernews", "reddit", "community", "browser_use", "all"),
         default="github",
     )
     parser.add_argument("--community-query", help="Hacker News query; defaults to the project name")
+    parser.add_argument("--reddit-query", help="Reddit query; defaults to the project name")
     parser.add_argument("--url", action="append", default=[], help="Dynamic URL; may be repeated")
     parser.add_argument("--feed-url", action="append", default=[], help="RSS/Atom feed URL; may be repeated")
     parser.add_argument("--enable-browser-use", action="store_true", help="Allow the Browser Use adapter")
     parser.add_argument("--browser-run-live", action="store_true", help="Actually run Browser Use after enabling it")
+    parser.add_argument(
+        "--schedule",
+        action="store_true",
+        help="Run the same read-only collection on an explicit bounded interval",
+    )
+    parser.add_argument(
+        "--schedule-interval",
+        type=float,
+        default=None,
+        help="Schedule interval in seconds (1-86400); requires --schedule",
+    )
+    parser.add_argument(
+        "--schedule-max-runs",
+        type=int,
+        default=None,
+        help="Maximum scheduled runs (1-1000); requires --schedule",
+    )
+    parser.add_argument(
+        "--schedule-run-immediately",
+        action="store_true",
+        help="Run once immediately instead of waiting for the first interval",
+    )
     parser.add_argument("--output", type=Path, help="Write JSON to a file instead of stdout")
     return parser
 
@@ -61,6 +87,115 @@ def _browser_adapter(args: argparse.Namespace) -> BrowserUseSourceAdapter:
         for item in os.getenv("SIGNAL_RADAR_BROWSER_ALLOWED_DOMAINS", "").split(",")
         if item.strip()
     )
+
+
+def _request_from_args(args: argparse.Namespace, *, run_id: str | None = None) -> RunRequest:
+    """Build one bounded request shared by one-shot and scheduled CLI modes."""
+
+    sources = ["github", "rss", "hackernews", "browser_use"] if args.source == "all" else [args.source]
+    return RunRequest(
+        mode=args.mode,
+        project=args.project,
+        window_days=args.days,
+        limit=args.limit,
+        sources=sources,
+        urls=args.url,
+        feed_urls=args.feed_url,
+        community_query=args.community_query,
+        max_steps=args.max_steps,
+        timeout_seconds=args.timeout_seconds,
+        run_id=run_id,
+    )
+
+
+def _scheduled_cli(args: argparse.Namespace) -> int:
+    """Run a bounded local schedule and persist every tick in SQLite history."""
+
+    env_config = scheduler_request_from_env()
+    request = _request_from_args(args)
+    config = SchedulerRequest(
+        request=request,
+        interval_seconds=args.schedule_interval if args.schedule_interval is not None else env_config.interval_seconds,
+        max_runs=args.schedule_max_runs if args.schedule_max_runs is not None else env_config.max_runs,
+        # CLI scheduling is opt-in, but the first tick is opt-in as well. This
+        # keeps a copied command from unexpectedly hitting a live source.
+        run_immediately=args.schedule_run_immediately,
+    )
+    history = HistoryStore(os.getenv("SIGNAL_RADAR_HISTORY_DB") or "data/runs.sqlite3")
+    github = GitHubSourceAdapter()
+    browser = _browser_adapter(args)
+    rss = RSSSourceAdapter(
+        feed_urls=tuple(item.strip() for item in os.getenv("SIGNAL_RADAR_RSS_FEEDS", "").split(",") if item.strip())
+    )
+    hackernews = HackerNewsSourceAdapter(
+        timeout=float(_env_int("SIGNAL_RADAR_HACKERNEWS_TIMEOUT", 8, 1, 60)),
+        max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 50, 1, 100),
+    )
+
+    def execute(payload: RunRequest) -> RunResponse:
+        run_id = payload.run_id or "cli-scheduled"
+        started = datetime.now(timezone.utc)
+        try:
+            if payload.mode == "replay":
+                report = load_fixture_report(args.fixture).model_copy(
+                    update={"run_id": run_id, "window_days": payload.window_days}
+                )
+                statuses = report.sources
+                status = "completed"
+                error = None
+            else:
+                report, statuses = _live_report(
+                    payload,
+                    run_id=run_id,
+                    github=github,
+                    browser=browser,
+                    rss=rss,
+                    hackernews=hackernews,
+                )
+                status = "completed" if all(item.status in {"ok", "replay"} for item in statuses) else "partial"
+                error = None
+            run = Run(
+                run_id=run_id,
+                mode=payload.mode,
+                status=status,
+                subject=payload.project or payload.subject,
+                window_days=payload.window_days,
+                started_at=started,
+                completed_at=datetime.now(timezone.utc),
+                report_id=report.report_id,
+                source_statuses=statuses,
+                error=error,
+            )
+            history.save(run, report)
+            return RunResponse(run=run, report=report)
+        except Exception as exc:
+            run = Run(
+                run_id=run_id,
+                mode=payload.mode,
+                status="failed",
+                subject=payload.project or payload.subject,
+                window_days=payload.window_days,
+                started_at=started,
+                completed_at=datetime.now(timezone.utc),
+                error=str(exc),
+            )
+            history.save(run)
+            return RunResponse(run=run, report=None)
+
+    scheduler = LocalScheduler(execute)
+    try:
+        scheduler.start(config)
+        state = scheduler.wait()
+    except KeyboardInterrupt:
+        state = scheduler.stop()
+    finally:
+        history.close()
+    output = state.model_dump_json(indent=2, exclude_none=False)
+    if args.output:
+        args.output.write_text(output + "\n", encoding="utf-8")
+    else:
+        sys.stdout.write(output + "\n")
+    return 0
     return BrowserUseSourceAdapter(
         enabled=args.enable_browser_use or _env_flag("SIGNAL_RADAR_BROWSER_ENABLED"),
         run_live=args.browser_run_live or _env_flag("SIGNAL_RADAR_BROWSER_RUN_LIVE"),
@@ -78,12 +213,20 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--max-steps must be between 1 and 40")
     if args.timeout_seconds is not None and not 0 < args.timeout_seconds <= 900:
         raise SystemExit("--timeout-seconds must be between 0 and 900")
+    if args.schedule_interval is not None and not 1 <= args.schedule_interval <= 86400:
+        raise SystemExit("--schedule-interval must be between 1 and 86400")
+    if args.schedule_max_runs is not None and not 1 <= args.schedule_max_runs <= 1000:
+        raise SystemExit("--schedule-max-runs must be between 1 and 1000")
+    if (args.schedule_interval is not None or args.schedule_max_runs is not None or args.schedule_run_immediately) and not args.schedule:
+        raise SystemExit("schedule options require --schedule")
+    if args.schedule:
+        return _scheduled_cli(args)
     run_id = "cli-replay" if args.mode == "replay" else "cli-live"
     if args.mode == "replay":
         report = load_fixture_report(args.fixture)
         report = report.model_copy(update={"run_id": run_id, "window_days": args.days})
     else:
-        sources = ["github", "rss", "hackernews", "browser_use"] if args.source == "all" else [args.source]
+        sources = ["github", "rss", "hackernews", "reddit", "browser_use"] if args.source == "all" else [args.source]
         request = RunRequest(
             mode="live",
             project=args.project,
@@ -93,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
             urls=args.url,
             feed_urls=args.feed_url,
             community_query=args.community_query,
+            reddit_query=args.reddit_query,
             max_steps=args.max_steps,
             timeout_seconds=args.timeout_seconds,
         )
@@ -111,6 +255,10 @@ def main(argv: list[str] | None = None) -> int:
             hackernews=HackerNewsSourceAdapter(
                 timeout=float(_env_int("SIGNAL_RADAR_HACKERNEWS_TIMEOUT", 8, 1, 60)),
                 max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 50, 1, 100),
+            ),
+            reddit=RedditSourceAdapter(
+                timeout=float(_env_int("SIGNAL_RADAR_REDDIT_TIMEOUT", 8, 1, 60)),
+                max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 50, 1, 100),
             ),
         )
     output = report.model_dump_json(indent=2, exclude_none=False)

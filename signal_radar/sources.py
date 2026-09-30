@@ -1024,6 +1024,179 @@ class HackerNewsSourceAdapter:
     fetch = collect
 
 
+class RedditSourceAdapter:
+    """读取 Reddit 的公开搜索 JSON，不需要登录。"""
+
+    base_url = "https://www.reddit.com/search.json"
+
+    def __init__(
+        self,
+        *,
+        timeout: float = 8.0,
+        max_limit: int = 50,
+        max_bytes: int = 2_000_000,
+        opener: JsonOpener | None = None,
+    ) -> None:
+        self.timeout = max(0.5, float(timeout))
+        self.max_limit = max(1, min(int(max_limit), 100))
+        self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
+        self._opener = opener or urlopen
+
+    def collect(
+        self,
+        query: str | None = None,
+        *,
+        limit: int = 20,
+        since: datetime | None = None,
+    ) -> SourceFetchResult:
+        query = str(query or "").strip()[:160]
+        if not query:
+            return SourceFetchResult(
+                status=SourceStatus(
+                    source="Reddit",
+                    source_type="community",
+                    status="error",
+                    access_status="error",
+                    detail="A non-empty Reddit query is required",
+                    error="missing_query",
+                )
+            )
+        bounded_limit = max(1, min(int(limit), self.max_limit))
+        if isinstance(since, str):
+            since = _parse_time(since)
+        if since and since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        params = urlencode({"q": query, "sort": "new", "t": "all", "limit": bounded_limit, "raw_json": 1})
+        request = Request(
+            f"{self.base_url}?{params}",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "signal-radar/0.2 (public community research)",
+            },
+        )
+        started = time.perf_counter()
+        try:
+            with self._opener(request, timeout=self.timeout) as response:
+                status_code = getattr(response, "status", None) or response.getcode()
+                try:
+                    raw = response.read(self.max_bytes + 1)
+                except TypeError:
+                    raw = response.read()
+            if status_code is not None and status_code >= 400:
+                status = "rate_limited" if status_code == 429 else "blocked" if status_code in {403, 429} else "error"
+                access = "rate_limited" if status_code == 429 else "blocked" if status_code == 403 else "error"
+                return SourceFetchResult(
+                    status=SourceStatus(
+                        source="Reddit",
+                        source_type="community",
+                        status=status,  # type: ignore[arg-type]
+                        access_status=access,  # type: ignore[arg-type]
+                        detail=f"HTTP {status_code}",
+                        error=f"http_{status_code}",
+                        latency_ms=_latency(started),
+                    )
+                )
+            if not isinstance(raw, (bytes, bytearray)):
+                raw = str(raw).encode("utf-8", errors="replace")
+            if len(raw) > self.max_bytes:
+                raise ValueError("response_too_large")
+            payload = json.loads(bytes(raw).decode("utf-8"))
+            children = (((payload or {}).get("data") or {}).get("children") or []) if isinstance(payload, dict) else []
+            if not isinstance(children, list):
+                raise ValueError("invalid_payload")
+        except HTTPError as exc:
+            return SourceFetchResult(
+                status=SourceStatus(
+                    source="Reddit", source_type="community", status="error", access_status="error",
+                    detail=f"HTTP {exc.code}", error=f"http_{exc.code}", latency_ms=_latency(started)
+                )
+            )
+        except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+            return SourceFetchResult(
+                status=SourceStatus(
+                    source="Reddit", source_type="community", status="error", access_status="error",
+                    detail="Reddit response could not be read", error=str(exc)[:240], latency_ms=_latency(started)
+                )
+            )
+
+        articles: list[Article] = []
+        evidence: list[Evidence] = []
+        claims: list[Claim] = []
+        events: list[Event] = []
+        for child in children:
+            item = child.get("data") if isinstance(child, dict) else None
+            if not isinstance(item, dict):
+                continue
+            published = None
+            created = item.get("created_utc")
+            if created is not None:
+                try:
+                    published = datetime.fromtimestamp(float(created), tz=timezone.utc)
+                except (TypeError, ValueError, OSError, OverflowError):
+                    published = None
+            if since and published and published < since:
+                continue
+            identifier = str(item.get("id") or item.get("name") or "").strip()
+            if not identifier:
+                continue
+            title = str(item.get("title") or "Reddit discussion").strip()
+            body = str(item.get("selftext") or "").strip()
+            permalink = str(item.get("permalink") or "").strip()
+            url = f"https://www.reddit.com{permalink}" if permalink.startswith("/") else str(item.get("url") or "")
+            url = url or f"https://www.reddit.com/comments/{quote(identifier, safe='')}"
+            article_id = f"reddit-{_hash_text(identifier + '|' + url)}"
+            text_value = f"{title}\n{body}".strip()
+            article = Article(
+                id=article_id,
+                url=url,
+                title=title,
+                source="Reddit",
+                source_type="community",
+                author=str(item.get("author") or "").strip() or None,
+                excerpt=(body or title)[:500] or None,
+                content=body or None,
+                published_at=published,
+                access_status="public",
+                content_hash=_hash_text(text_value),
+                tags=["community", "reddit", str(item.get("subreddit") or "unknown")],
+                metadata={"collector": "reddit_public_json", "query": query, "score": item.get("score")},
+            )
+            stance, sentiment, category = _classify_feedback(text_value)
+            risk_score = 64.0 if sentiment == "negative" else 18.0 if sentiment == "positive" else 28.0
+            evidence_id = f"ev-{article_id.removeprefix('reddit-')}"
+            claim_id = f"claim-{article_id.removeprefix('reddit-')}"
+            event_id = f"event-{article_id.removeprefix('reddit-')}"
+            evidence_level = "full_text" if body else "metadata_only"
+            confidence = 0.82 if body else 0.55
+            evidence.append(Evidence(
+                id=evidence_id, article_id=article_id, url=url, source="Reddit", title=title,
+                quote=body[:600] if body else "", evidence_level=evidence_level, confidence=confidence,
+                published_at=published, content_hash=article.content_hash,
+            ))
+            claims.append(Claim(
+                id=claim_id, text=text_value[:280].replace("\n", " "), claim_type="community_discussion" if category == "feedback" else category,
+                stance=stance, sentiment=sentiment, confidence=confidence, evidence_ids=[evidence_id],
+                article_ids=[article_id], topics=["community", "reddit"],
+            ))
+            events.append(Event(
+                id=event_id, title=title, category="community_discussion", summary=article.excerpt,
+                risk_level="high" if risk_score >= 60 else "medium" if risk_score >= 30 else "low",
+                risk_score=risk_score, sentiment=sentiment, occurred_at=published,
+                article_ids=[article_id], claim_ids=[claim_id], evidence_ids=[evidence_id],
+            ))
+            articles.append(article)
+            if len(articles) >= bounded_limit:
+                break
+        return SourceFetchResult(
+            status=SourceStatus(
+                source="Reddit", source_type="community", status="ok", access_status="public",
+                records=len(articles), detail=f"{len(articles)} records for query={query!r}", latency_ms=_latency(started)
+            ), articles=articles, claims=claims, events=events, evidence=evidence,
+        )
+
+    fetch = collect
+
+
 def _latency(started: float) -> float:
     return round((time.perf_counter() - started) * 1000.0, 1)
 
@@ -1611,6 +1784,7 @@ class BrowserUseSourceAdapter:
 GitHubAdapter = GitHubSourceAdapter
 BrowserUseAdapter = BrowserUseSourceAdapter
 HackerNewsAdapter = HackerNewsSourceAdapter
+RedditAdapter = RedditSourceAdapter
 FeedSourceAdapter = RSSSourceAdapter
 RssSourceAdapter = RSSSourceAdapter
 RSSAdapter = RSSSourceAdapter
@@ -1626,6 +1800,8 @@ __all__ = [
     "GitHubSourceAdapter",
     "HackerNewsAdapter",
     "HackerNewsSourceAdapter",
+    "RedditAdapter",
+    "RedditSourceAdapter",
     "FeedSourceAdapter",
     "RssSourceAdapter",
     "RSSAdapter",

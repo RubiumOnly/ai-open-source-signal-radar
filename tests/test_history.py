@@ -13,11 +13,39 @@ except ImportError:  # pragma: no cover - API extra is optional
     TestClient = None  # type: ignore[assignment]
 
 from signal_radar.history import HistoryStore, report_to_markdown
-from signal_radar.models import Report, Run
+from signal_radar.models import Annotation, Report, Run
 from signal_radar.repository import load_fixture_report
 
 
 class HistoryStoreTests(unittest.TestCase):
+    def test_annotations_round_trip_and_filter(self) -> None:
+        store = HistoryStore(":memory:")
+        self.addCleanup(store.close)
+        annotation = Annotation(
+            id="ann-1",
+            run_id="run-1",
+            target_type="evidence",
+            target_id="ev-001",
+            label="correctness",
+            value="correct",
+            note="The quote is directly visible in the issue.",
+            reviewer="reviewer@example.test",
+        )
+        store.add_annotation(annotation)
+        self.assertEqual(store.get_annotation("ann-1").value, "correct")  # type: ignore[union-attr]
+        self.assertEqual(store.list_annotations(run_id="run-1")[0].target_id, "ev-001")
+        self.assertEqual(store.export_annotations(label="correctness")[0].id, "ann-1")
+
+    def test_annotation_value_is_constrained_by_label(self) -> None:
+        with self.assertRaises(ValueError):
+            Annotation(
+                target_type="event",
+                target_id="event-1",
+                label="risk",
+                value="maybe",
+                reviewer="reviewer",
+            )
+
     def test_memory_store_round_trips_run_and_report(self) -> None:
         report = load_fixture_report()
         run = Run(
@@ -76,6 +104,53 @@ class HistoryStoreTests(unittest.TestCase):
 
 @unittest.skipIf(TestClient is None, "FastAPI extra is not installed")
 class HistoryEndpointTests(unittest.TestCase):
+    def test_annotation_endpoints_validate_and_export_labels(self) -> None:
+        from signal_radar.api import create_app
+
+        store = HistoryStore(":memory:")
+        self.addCleanup(store.close)
+        client = TestClient(create_app(history_store=store))
+        run = client.post("/api/run", json={"mode": "replay"}).json()["run"]
+        report = client.get("/api/report").json()
+        evidence_id = report["evidence"][0]["id"]
+        payload = {
+            "id": "ann-api-1",
+            "run_id": run["run_id"],
+            "target_type": "evidence",
+            "target_id": evidence_id,
+            "label": "correctness",
+            "value": "correct",
+            "reviewer": "local-reviewer",
+        }
+        response = client.post("/api/annotations", json=payload)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(client.get("/api/annotations", params={"run_id": run["run_id"]}).json()[0]["id"], "ann-api-1")
+        exported = client.get("/api/annotations/export.json", params={"run_id": run["run_id"]})
+        self.assertEqual(exported.status_code, 200)
+        self.assertEqual(exported.json()[0]["target_id"], evidence_id)
+        duplicate = client.post("/api/annotations", json=payload)
+        self.assertEqual(duplicate.status_code, 409)
+
+    def test_annotation_endpoint_rejects_unknown_report_target(self) -> None:
+        from signal_radar.api import create_app
+
+        store = HistoryStore(":memory:")
+        self.addCleanup(store.close)
+        client = TestClient(create_app(history_store=store))
+        run = client.post("/api/run", json={"mode": "replay"}).json()["run"]
+        response = client.post(
+            "/api/annotations",
+            json={
+                "run_id": run["run_id"],
+                "target_type": "claim",
+                "target_id": "claim-missing",
+                "label": "stance",
+                "value": "support",
+                "reviewer": "local-reviewer",
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+
     def test_run_endpoints_use_persisted_store(self) -> None:
         from signal_radar.api import create_app
 

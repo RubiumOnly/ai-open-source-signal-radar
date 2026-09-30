@@ -6,6 +6,8 @@
 
 项目的目标不是宣称“抓取全网舆情”，也不是把 GitHub 代码当成舆情。GitHub Issues、Discussions、Pull Requests 和 Releases 代表项目参与者的反馈与维护状态；外部网站用于补充使用体验。报告会区分**事实、观点、统计信号和推断**，并在证据不足时明确标注不确定性。
 
+当前重构入口是一个 React + TypeScript 研究工作台：用户输入自然语言研究简报，先确认项目、时间窗口、主题和来源，再启动有界运行。工作台通过结构化事件流展示来源采集、记录数量、延迟、失败状态和最终证据报告；旧 `web/` 页面暂时保留为静态 Replay 回退。
+
 ## 典型使用场景
 
 输入一个项目和时间窗口，例如：
@@ -27,9 +29,9 @@
 ## 架构
 
 ```text
-Dashboard / API
+React Workbench / API
       |
-Run Orchestrator  -- 运行 ID、预算、重试、超时、只读策略
+Run Orchestrator  -- 研究计划、运行 ID、预算、并行、取消、只读策略
       |
 来源适配器：GitHub API / RSS 与 Atom 官方博客 / Hacker News Algolia / Replay fixture / Browser Use 动态网页
       |
@@ -39,7 +41,7 @@ Browser Use 回退：动态页面、跨页上下文、授权后的本地会话
       |
 去重与聚类  ->  风险评分  ->  JSON / Markdown 报告
       |
-Trace、URL、截图、失败记录、评测指标
+SSE 事件、Trace、URL、截图、失败记录、评测指标
 ```
 
 **Browser Use 的职责**是规划和执行需要浏览器的只读动作，例如展开动态 Discussions、跨页面寻找上下文、在用户确认后浏览登录态页面。稳定的结构化数据优先使用 GitHub API、RSS 或普通 HTTP 请求，避免让浏览器承担可以确定性完成的工作。领域模型、去重、评分和报告契约由本项目实现。
@@ -120,6 +122,18 @@ pip install -e ".[dev,api]"
 Copy-Item .env.example .env
 ```
 
+### React 工作台
+
+在另一个终端启动主要产品入口：
+
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+打开 `http://localhost:4174`。首页研究简报的计划解析不会访问网络；确认来源和调研深度后，点击“开始研究”才会创建运行。
+
 ### Replay 模式（无需网络和 API Key）
 
 Replay 使用 `fixtures/demo_report.json`，适合仓库内本地演示、首次体验和离线测试：
@@ -128,7 +142,7 @@ Replay 使用 `fixtures/demo_report.json`，适合仓库内本地演示、首次
 python -m signal_radar --mode replay --fixture fixtures/demo_report.json
 ```
 
-如果项目提供 Web 前端，可将生成的 JSON 放入静态报告目录；Replay 不会启动浏览器，也不会读取任何密钥。
+Replay 不会启动浏览器，也不会读取任何密钥。React 工作台会通过 API 加载同一份固定报告。
 
 ### Live 模式
 
@@ -147,20 +161,49 @@ python -m signal_radar --mode live --project browser-use/browser-use --source rs
   --feed-url https://example.com/blog/feed.xml --days 30 --limit 10
 ```
 
-启动本地 API（供 `web/` Dashboard 使用）：
+启动本地 API（供 React 工作台和旧版 Replay 页面使用）：
 
 ```powershell
 pip install -e ".[dev,api]"
 uvicorn signal_radar.api:app --reload --port 8000 --env-file .env
 ```
 
-另开一个终端提供本地 Dashboard；不带 `api` 参数时页面仍会自动回退到 Replay fixture：
+如果 `frontend/dist` 已构建，FastAPI 会在同一个端口挂载 React 工作台；开发时推荐使用 Vite 的 `4174` 端口和代理。
+
+本地开发默认不启用 API 认证，因此 Replay Dashboard 开箱即用。部署到共享或公网环境时，
+请在后端设置随机的 `SIGNAL_RADAR_API_TOKEN`；启用后，运行控制和历史导出接口需要
+`Authorization: Bearer <token>`，健康检查、当前报告和来源状态仍可用于探活与只读展示：
+
+```powershell
+$env:SIGNAL_RADAR_API_TOKEN = "replace-with-a-long-random-token"
+uvicorn signal_radar.api:app --port 8000 --env-file .env
+```
+
+带认证启动 Replay 运行：
+
+```powershell
+$headers = @{ Authorization = "Bearer $env:SIGNAL_RADAR_API_TOKEN" }
+Invoke-RestMethod http://localhost:8000/api/run -Method Post -Headers $headers `
+  -ContentType "application/json" -Body (@{ mode = "replay" } | ConvertTo-Json)
+```
+
+旧版静态 Replay 页面仍可单独启动：
 
 ```powershell
 python -m http.server 4173 --directory web
 ```
 
-打开 `http://localhost:4173/?api=http%3A%2F%2Flocalhost%3A8000`，即可让 Dashboard 请求本地 API。`api` 查询参数只用于本地演示，生产部署时应通过同源反向代理或显式配置 `window.SIGNAL_RADAR_API_BASE`。
+打开 `http://localhost:4173/?api=http%3A%2F%2Flocalhost%3A8000`，即可使用旧版静态 Replay。主要产品入口是 `http://localhost:4174`。
+
+研究计划和运行流接口：
+
+```text
+POST /api/plan                         解析自然语言研究简报，不访问网络
+POST /api/runs                         后台启动运行，返回 run_id
+GET  /api/runs/{run_id}/stream         SSE 结构化来源事件
+GET  /api/runs/{run_id}/events         获取已保存的运行事件
+GET  /api/runs/{run_id}                查询运行和报告
+```
 
 Browser Use 动态采集是显式开启的可选路径。先安装额外依赖，在本地环境变量中配置模型 Key，
 再把 `SIGNAL_RADAR_BROWSER_ENABLED` 和 `SIGNAL_RADAR_BROWSER_RUN_LIVE` 都设为 `true`：
@@ -325,24 +368,117 @@ GET  /api/runs/{run_id}/markdown
 
 Markdown 导出包含摘要、关键事件、主题、证据和来源状态，适合归档或二次编辑。测试环境可以向 `create_app(history_store=HistoryStore(":memory:"))` 注入内存存储。
 
+### 本地定时调度（默认关闭）
+
+项目提供一个基于 Python 标准库的本地有界调度器，用来重复执行已有的只读
+`RunRequest`。它不新增浏览器动作，不绕过登录或验证码，也不会在导入 API 时
+自动启动。每次 tick 都复用同一套来源适配器、预算、取消边界和 SQLite 历史，
+因此可以通过 `/api/runs` 审计每一次运行。调度默认等待第一个间隔；如需立即
+执行一次，显式设置 `run_immediately`。
+
+查看调度状态、启动和停止：
+
+```powershell
+# 默认状态为 disabled；下面的启动请求最多运行两次，每次间隔 1 小时。
+Invoke-RestMethod http://localhost:8000/api/schedule
+Invoke-RestMethod http://localhost:8000/api/schedule -Method Post -ContentType "application/json" -Body (@{
+  request = @{
+    mode = "live"
+    project = "browser-use/browser-use"
+    sources = @("github", "community")
+    community_query = "browser-use"
+    window_days = 7
+    limit = 10
+  }
+  interval_seconds = 3600
+  max_runs = 2
+  run_immediately = $true
+} | ConvertTo-Json -Depth 5)
+Invoke-RestMethod http://localhost:8000/api/schedule/stop -Method Post
+```
+
+调度请求只接受内置来源名称（`github`、`rss`、`hackernews`、`browser_use`
+及其只读别名），最多 4 个来源和 20 个 URL/feed，间隔限制在 1 秒到 24 小时，
+单个计划最多 1000 次运行。调度线程是 daemon 线程；停止服务或调用 stop 后，
+不会再创建新的 tick。正在进行的 Live 运行会尽力通过现有取消句柄停止。
+
+也可以使用 CLI。`--schedule` 是唯一的启用开关，命令结束前会将每次运行保存
+到 `SIGNAL_RADAR_HISTORY_DB`：
+
+```powershell
+python -m signal_radar --mode replay --fixture fixtures/demo_report.json `
+  --schedule --schedule-interval 60 --schedule-max-runs 2 --schedule-run-immediately
+```
+
+环境变量 `SIGNAL_RADAR_SCHEDULER_*` 只提供 API 启动请求的默认值，详见
+`.env.example`；没有显式调用 API 或传入 `--schedule` 时不会调度。
+
+### 人工复核与标注数据
+
+报告生成后可以通过独立的标注记录建立人工复核闭环。标注不会改写模型输出，
+而是引用报告中的 `evidence`、`claim` 或 `event` ID，并记录复核维度、判断、
+备注、复核者和时间戳。支持的维度与值为：
+
+| 维度 | 可选判断 |
+| --- | --- |
+| `stance` | `support`、`supportive`、`oppose`、`against`、`uncertain`、`mixed`、`neutral` |
+| `risk` | `low`、`medium`、`high`、`critical` |
+| `correctness` | `correct`、`partially_correct`、`incorrect`、`uncertain` |
+
+接口默认跟随运行历史的认证策略（设置 `SIGNAL_RADAR_API_TOKEN` 后需要
+`Authorization: Bearer <token>`）：
+
+```text
+POST /api/annotations                 新增一条人工复核标签
+GET  /api/annotations                 按运行、对象或维度筛选
+GET  /api/annotations/export.json     导出 JSON 标注集
+```
+
+示例请求：
+
+```json
+{
+  "run_id": "run-local-demo",
+  "target_type": "evidence",
+  "target_id": "ev-001",
+  "label": "correctness",
+  "value": "correct",
+  "note": "原文能够直接支持该引用。",
+  "reviewer": "local-reviewer"
+}
+```
+
+服务端会校验 `run_id` 对应报告中是否存在目标 ID，避免产生无法回溯的孤立标注。
+导出的数组可以直接接入离线评测 harness，评估标注目标覆盖率并报告孤立记录：
+
+```powershell
+python -m signal_radar.evaluate `
+  --fixture fixtures/demo_report.json `
+  --annotations reports/annotations.json `
+  --output reports/evaluation-with-annotations.json
+```
+
+标注属于本地复核数据，默认保存在 `data/runs.sqlite3`，不会写入报告 fixture，
+也不应把包含个人信息的标注文件提交到公开仓库。
+
 ## 运行、展示与部署
 
-GitHub 仓库包含完整源码、测试、fixture 和运行文档。推荐先运行 Replay，再切换到 Live；`web/` 是仓库内的本地 Dashboard，不承担 Python Agent、Chromium 或 API Key。
+GitHub 仓库包含完整源码、测试、fixture 和运行文档。推荐先运行 Replay，再切换到 Live；`frontend/` 是主要工作台，不承担 Python Agent、Chromium 或模型 Key。
 
 推荐拆分为：
 
 1. 本地或受控云服务：Live API、模型调用和 Browser Use；
-2. `web/`：可选的静态 Dashboard，默认加载 `fixtures/demo_report.json`；
-3. 如需对外展示，可单独托管 `web/` 的 Replay 静态文件，但这不是项目运行前提；
-4. 前端通过环境变量配置后端地址，绝不把模型 Key 放进浏览器包。
+2. `frontend/`：React 研究工作台，通过 REST + SSE 访问 API；
+3. `web/`：旧版静态 Replay 回退，可单独托管但不承担 Live 运行；
+4. 前端只保存用户主动填写的 API Bearer Token，绝不把模型 Key 放进浏览器包。
 
-## Dashboard 预览
+## Replay 回退预览
 
-下面是本地 Replay API 加载真实 fixture 后生成的截图，桌面和移动视口均已验证：
+下面是旧版静态 Replay 页面加载真实 fixture 后生成的截图，桌面和移动视口均已验证。React 工作台的运行入口见上面的 `frontend/` 章节：
 
-![桌面 Dashboard 预览](docs/images/signal-radar-dashboard-desktop.png)
+![旧版 Replay 桌面预览](docs/images/signal-radar-dashboard-desktop.png)
 
-![移动 Dashboard 预览](docs/images/signal-radar-dashboard-mobile.png)
+![旧版 Replay 移动预览](docs/images/signal-radar-dashboard-mobile.png)
 
 建议按以下顺序启动一个本地运行：
 
@@ -354,19 +490,19 @@ python -m signal_radar --mode replay --fixture fixtures/demo_report.json
 
 随后可以查看源码、契约测试、fixture、架构图，以及 Live 模式的模型、浏览器会话、权限边界和失败降级。Live 运行应明确提示网络、成本和来源访问限制。
 
-### Docker（Replay API）
+### Docker（Replay API + React 工作台）
 
-仓库附带最小 API 镜像，默认只提供 Replay，不安装浏览器，也不需要模型 Key：
+仓库附带多阶段镜像，默认提供 Replay API 和已构建的 React 工作台，不安装浏览器，也不需要模型 Key：
 
 ```powershell
 Copy-Item .env.example .env
 docker compose up --build
 ```
 
-服务默认监听 `http://localhost:8000`。Live 部署应单独构建受控镜像并安装 `.[live]`，同时配置域名白名单、资源预算和人工确认策略；不要把宿主机 Chrome Cookie 挂载到公共服务。
+服务默认监听 `http://localhost:8000`，打开根路径即可进入工作台。Live 部署应单独构建受控镜像并安装 `.[live]`，同时配置域名白名单、资源预算和人工确认策略；不要把宿主机 Chrome Cookie 挂载到公共服务。
 GitHub API、RSS 和 Hacker News 请求会在来源调用前后检查总预算，但同步 HTTP 请求本身无法被线程外硬中断；它们完成后会被统一标记为 `partial` 或 `cancelled`。Browser Use 任务支持真实的超时和协作式取消。
 
-主要 API：`GET /api/health` 检查服务，`GET /api/report` 读取当前报告，`GET /api/sources` 查看来源状态，`POST /api/run` 启动 Replay 或 Live 运行。接口返回的报告遵循上面的 `Report` 契约。
+主要 API：`GET /api/health` 检查服务，`GET /api/report` 读取当前报告，`GET /api/sources` 查看来源状态，`POST /api/run` 启动 Replay 或 Live 运行。接口返回的报告遵循上面的 `Report` 契约。设置 `SIGNAL_RADAR_API_TOKEN` 后，`POST /api/run`、`GET /api/run`、运行历史（`/api/runs*`）、取消和 Markdown 导出均要求 Bearer Token；健康、报告和来源读取保持公开，便于只读 Dashboard 和探活。
 运行控制 API：`GET /api/runs` 查看历史，`GET /api/runs/{run_id}` 查看预算和结果，
 `POST /api/runs/{run_id}/cancel` 请求取消仍在运行的任务，`GET /api/runs/{run_id}/markdown`
 导出可审计 Markdown 报告。
@@ -375,8 +511,9 @@ GitHub API、RSS 和 Hacker News 请求会在来源调用前后检查总预算�
 
 ```text
 signal_radar/       后端编排、来源适配器、报告模型
+frontend/            React + TypeScript 研究工作台
 docs/images/        README 使用的真实 Dashboard 截图
-web/                仓库内本地 Dashboard（可选静态 Replay 展示）
+web/                旧版静态 Replay 回退
 fixtures/           离线演示和评测输入
 data/               本地 SQLite 运行历史（默认不提交）
 tests/              不需要网络/API Key 的契约与单元测试
@@ -388,7 +525,7 @@ tests/              不需要网络/API Key 的契约与单元测试
 - 凭据、浏览器权限和漏洞报告规则见 [`SECURITY.md`](SECURITY.md)；
 - 版本变化见 [`CHANGELOG.md`](CHANGELOG.md)。
 
-仓库的 GitHub Actions 会在 Python 3.11/3.12 下运行契约测试、离线评测、编译检查、依赖检查和前端语法检查。
+仓库的 GitHub Actions 会在 Python 3.11/3.12 和 Node 22 下运行契约测试、离线评测、编译检查、依赖检查和 React 构建。
 
 ## 当前扩展版范围
 
@@ -396,9 +533,12 @@ tests/              不需要网络/API Key 的契约与单元测试
 - 已完成证据链、趋势、主题、关键事件、风险评分与 Markdown 导出；
 - 已完成 SQLite 运行历史、预算、取消接口、域名白名单和 Prompt Injection 回归门禁；
 - 已完成离线评测 harness、失败样例、GitHub Actions 质量门禁和桌面/移动截图；
+- 已完成默认关闭的本地定时调度：可配置来源、时间间隔和最大次数，每次运行写入 SQLite 历史并支持停止；
+- 已完成有界并行来源编排、研究计划预览、后台运行和结构化 SSE 事件；
+- 已启动 React 工作台重构：研究简报、来源预览、运行监控、风险信号和证据卡片已接入 Replay/API；
 - 登录来源仍保持只读和人工授权边界，不绕过验证码、付费墙或访问控制。
 
-后续可选方向包括定时调度、账号认证、人工标注平台和更完整的行业来源适配器；它们不影响当前扩展版的本地可复现闭环。
+后续重构重点是完善报告 Trace 回放、增量缓存、更多确定性页面适配器和授权浏览器 Worker；现有安全、预算、取消、标注和离线评测能力必须保持。
 
 ## 设计与工程要点
 

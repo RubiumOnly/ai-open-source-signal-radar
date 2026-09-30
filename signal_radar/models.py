@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -45,6 +46,8 @@ SourceRunStatus = Literal[
 ]
 Sentiment = Literal["positive", "negative", "neutral", "mixed", "unknown"]
 Stance = Literal["support", "supportive", "oppose", "against", "uncertain", "mixed", "neutral"]
+AnnotationTarget = Literal["evidence", "claim", "event"]
+AnnotationLabel = Literal["stance", "risk", "correctness"]
 
 
 class ContractModel(BaseModel):
@@ -151,6 +154,39 @@ class Event(ContractModel):
     evidence_ids: list[str] = Field(default_factory=list)
 
 
+class Annotation(ContractModel):
+    """人工复核标签，指向报告中的一条证据、观点或事件。
+
+    ``label`` 表示被复核的维度，``value`` 表示该维度的人工判断。
+    通过单独保存 ``run_id`` 和时间戳，可以把标注作为可追溯评测数据导出，
+    而不会改写模型原始报告。
+    """
+
+    id: str = Field(default_factory=lambda: f"ann-{uuid4().hex[:12]}", min_length=1, max_length=100)
+    run_id: str | None = Field(default=None, min_length=1, max_length=100)
+    target_type: AnnotationTarget
+    target_id: str = Field(min_length=1, max_length=160)
+    label: AnnotationLabel
+    value: str = Field(min_length=1, max_length=64)
+    note: str | None = Field(default=None, max_length=4000)
+    reviewer: str = Field(min_length=1, max_length=120)
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_value(self) -> "Annotation":
+        allowed = {
+            "stance": {"support", "supportive", "oppose", "against", "uncertain", "mixed", "neutral"},
+            "risk": {"low", "medium", "high", "critical"},
+            "correctness": {"correct", "partially_correct", "incorrect", "uncertain"},
+        }
+        normalized = self.value.strip().lower().replace("-", "_")
+        if normalized not in allowed[self.label]:
+            options = ", ".join(sorted(allowed[self.label]))
+            raise ValueError(f"value must be one of {options} for label {self.label}")
+        self.value = normalized
+        return self
+
+
 class SourceStatus(ContractModel):
     source: str = "unknown"
     source_type: str = "community"
@@ -198,14 +234,19 @@ class RunBudget(ContractModel):
 class RunRequest(ContractModel):
     mode: Literal["replay", "live"] = "replay"
     subject: str = "browser-use/browser-use"
+    # 自然语言研究简报；与 project/repository 兼容，便于前端先生成计划。
+    query: str | None = Field(default=None, max_length=4000)
     # ``project`` 和 ``source`` 兼容仪表盘的简化表单。
     project: str | None = None
     repository: str | None = None
     window_days: int = Field(default=7, ge=1, le=3650)
     limit: int = Field(default=20, ge=1, le=100)
+    research_mode: Literal["quick", "standard", "deep"] = "standard"
+    focus: list[str] = Field(default_factory=list, max_length=12)
     sources: list[str] = Field(default_factory=lambda: ["github"])
     source: str | None = None
     community_query: str | None = None
+    reddit_query: str | None = None
     urls: list[str] = Field(default_factory=list)
     feed_urls: list[str] = Field(default_factory=list)
     fixture: str | None = None
@@ -215,6 +256,40 @@ class RunRequest(ContractModel):
     budget: RunBudget | None = None
     # 允许客户端在异步取消前预先指定一个可追踪的运行 ID。
     run_id: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+class SchedulerRequest(ContractModel):
+    """本地只读调度器的配置。
+
+    调度器只负责按固定间隔调用既有 ``RunRequest`` 编排，不会扩大单次
+    运行预算，也不会执行来源适配器之外的写操作。默认不立即运行，且一
+    次启动最多执行有限次数；需要持续运行时可由调用方重新启动。
+    """
+
+    request: RunRequest = Field(default_factory=RunRequest)
+    interval_seconds: float = Field(default=3600.0, ge=1.0, le=86400.0)
+    max_runs: int = Field(default=100, ge=1, le=1000)
+    run_immediately: bool = False
+
+
+class SchedulerState(ContractModel):
+    """后台调度器的可审计状态快照。"""
+
+    enabled: bool = False
+    status: Literal["disabled", "scheduled", "running", "stopping", "stopped", "completed", "failed"] = "disabled"
+    schedule_id: str | None = None
+    interval_seconds: float | None = Field(default=None, ge=1.0, le=86400.0)
+    max_runs: int | None = Field(default=None, ge=1, le=1000)
+    run_immediately: bool = False
+    runs_started: int = Field(default=0, ge=0)
+    runs_completed: int = Field(default=0, ge=0)
+    last_run_id: str | None = None
+    last_run_status: str | None = None
+    last_error: str | None = None
+    started_at: datetime | None = None
+    last_run_at: datetime | None = None
+    next_run_at: datetime | None = None
+    stopped_at: datetime | None = None
 
 
 class Run(ContractModel):
@@ -245,6 +320,48 @@ class Run(ContractModel):
 class RunResponse(ContractModel):
     run: Run
     report: Report | None = None
+
+
+class ResearchPlan(ContractModel):
+    """前端确认前展示的、无需联网的研究计划。"""
+
+    query: str = ""
+    project: str = "browser-use/browser-use"
+    window_days: int = Field(default=30, ge=1, le=3650)
+    research_mode: Literal["quick", "standard", "deep"] = "standard"
+    focus: list[str] = Field(default_factory=list, max_length=12)
+    sources: list[str] = Field(default_factory=list, max_length=8)
+    urls: list[str] = Field(default_factory=list, max_length=20)
+    explanation: str = ""
+
+
+class PlanRequest(ContractModel):
+    """自然语言研究简报的解析请求。"""
+
+    query: str = Field(min_length=1, max_length=4000)
+    project: str | None = Field(default=None, max_length=200)
+    window_days: int | None = Field(default=None, ge=1, le=3650)
+    research_mode: Literal["quick", "standard", "deep"] = "standard"
+    sources: list[str] = Field(default_factory=list, max_length=8)
+
+
+class PlanResponse(ContractModel):
+    plan: ResearchPlan
+
+
+class RunEvent(ContractModel):
+    """运行流中的结构化状态事件，不承载内部思维链。"""
+
+    id: str
+    run_id: str
+    type: Literal["queued", "started", "plan", "source_started", "source_completed", "completed", "partial", "cancelled", "failed"]
+    stage: str = ""
+    source: str | None = None
+    status: str | None = None
+    records: int = 0
+    latency_ms: float | None = None
+    message: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class HealthResponse(ContractModel):

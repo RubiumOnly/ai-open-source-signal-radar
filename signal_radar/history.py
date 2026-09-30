@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import Report, Run, RunResponse
+from .models import Annotation, Report, Run, RunResponse
 
 
 DEFAULT_HISTORY_PATH = Path(__file__).resolve().parent.parent / "data" / "runs.sqlite3"
@@ -154,6 +154,28 @@ class HistoryStore:
                 """
             )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC)")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS annotations (
+                    annotation_id TEXT PRIMARY KEY,
+                    run_id TEXT,
+                    target_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    note TEXT,
+                    reviewer TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    annotation_json TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_annotations_target ON annotations(target_type, target_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_annotations_run ON annotations(run_id, timestamp DESC)"
+            )
             connection.commit()
         finally:
             if connection is not self._memory_connection:
@@ -241,6 +263,114 @@ class HistoryStore:
 
     get_run = get
 
+    def add_annotation(self, annotation: Annotation) -> Annotation:
+        """Persist one review label without replacing an existing annotation."""
+
+        annotation_json = annotation.model_dump_json(exclude_none=False)
+        connection = self._connection()
+        try:
+            connection.execute(
+                """
+                INSERT INTO annotations (
+                    annotation_id, run_id, target_type, target_id, label, value,
+                    note, reviewer, timestamp, annotation_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    annotation.id,
+                    annotation.run_id,
+                    annotation.target_type,
+                    annotation.target_id,
+                    annotation.label,
+                    annotation.value,
+                    annotation.note,
+                    annotation.reviewer,
+                    _json_datetime(annotation.timestamp),
+                    annotation_json,
+                ),
+            )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"annotation already exists: {annotation.id}") from exc
+        finally:
+            if connection is not self._memory_connection:
+                connection.close()
+        return annotation
+
+    save_annotation = add_annotation
+
+    def get_annotation(self, annotation_id: str) -> Annotation | None:
+        connection = self._connection()
+        try:
+            row = connection.execute(
+                "SELECT annotation_json FROM annotations WHERE annotation_id = ?",
+                (annotation_id,),
+            ).fetchone()
+            return Annotation.model_validate_json(row["annotation_json"]) if row is not None else None
+        finally:
+            if connection is not self._memory_connection:
+                connection.close()
+
+    def list_annotations(
+        self,
+        *,
+        run_id: str | None = None,
+        target_type: str | None = None,
+        target_id: str | None = None,
+        label: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Annotation]:
+        """List labels with optional report/target filters for review tooling."""
+
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+        clauses: list[str] = []
+        values: list[Any] = []
+        for column, value in (
+            ("run_id", run_id),
+            ("target_type", target_type),
+            ("target_id", target_id),
+            ("label", label),
+        ):
+            if value:
+                clauses.append(f"{column} = ?")
+                values.append(value)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        connection = self._connection()
+        try:
+            rows = connection.execute(
+                "SELECT annotation_json FROM annotations"
+                + where
+                + " ORDER BY julianday(timestamp) DESC, annotation_id DESC LIMIT ? OFFSET ?",
+                (*values, limit, offset),
+            ).fetchall()
+            return [Annotation.model_validate_json(row["annotation_json"]) for row in rows]
+        finally:
+            if connection is not self._memory_connection:
+                connection.close()
+
+    annotations = list_annotations
+
+    def export_annotations(
+        self,
+        *,
+        run_id: str | None = None,
+        target_type: str | None = None,
+        target_id: str | None = None,
+        label: str | None = None,
+    ) -> list[Annotation]:
+        """Return all matching labels for JSON evaluation-data export."""
+
+        return self.list_annotations(
+            run_id=run_id,
+            target_type=target_type,
+            target_id=target_id,
+            label=label,
+            limit=500,
+            offset=0,
+        )
+
     def markdown(self, run_id: str) -> str | None:
         response = self.get(run_id)
         if response is None or response.report is None:
@@ -263,5 +393,6 @@ __all__ = [
     "HistoryStore",
     "SQLiteHistoryStore",
     "RunHistoryStore",
+    "Annotation",
     "report_to_markdown",
 ]

@@ -106,6 +106,45 @@ class EvaluationTests(unittest.TestCase):
         self.assertIn('"citation_coverage"', output_text)
         self.assertEqual(payload["evaluator_version"], "0.2.0")
 
+    def test_cli_consumes_annotation_export_and_reports_target_coverage(self) -> None:
+        report = _coherent_report()
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = Path(directory) / "report.json"
+            annotations_path = Path(directory) / "annotations.json"
+            output = Path(directory) / "evaluation.json"
+            report_path.write_text(report.model_dump_json(), encoding="utf-8")
+            annotations_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "ann-eval-1",
+                            "run_id": report.run_id,
+                            "target_type": "evidence",
+                            "target_id": report.evidence[0].id,
+                            "label": "correctness",
+                            "value": "correct",
+                            "reviewer": "reviewer",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            exit_code = main(
+                [
+                    "--fixture",
+                    str(report_path),
+                    "--annotations",
+                    str(annotations_path),
+                    "--output",
+                    str(output),
+                ]
+            )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["annotations"]["count"], 1)
+        self.assertEqual(payload["annotations"]["target_coverage_pct"], 100.0)
+        self.assertTrue(payload["checks"]["annotation_schema_valid"])
+
 
 if __name__ == "__main__":
     unittest.main()

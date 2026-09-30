@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .models import Event, Report
+from .models import Annotation, Event, Report
 from .scoring import _risk_level, score_risk
 
 
@@ -160,13 +160,62 @@ def _security_metrics(report: Report) -> dict[str, Any]:
     }
 
 
-def evaluate_report(report: Report, *, fixture: str | None = None) -> dict[str, Any]:
+def _annotation_metrics(report: Report, annotations: list[Annotation]) -> dict[str, Any]:
+    """Check that human labels point at real report items.
+
+    This is intentionally a consistency/coverage metric rather than an
+    accuracy claim: correctness can only be measured after a separate gold
+    set is supplied.  Exported annotations are nevertheless immediately
+    consumable by this harness and expose orphan labels instead of silently
+    dropping them.
+    """
+
+    targets = {
+        "evidence": {item.id for item in report.evidence},
+        "claim": {item.id for item in report.claims},
+        "event": {item.id for item in report.events},
+    }
+    orphaned = [
+        {
+            "id": item.id,
+            "target_type": item.target_type,
+            "target_id": item.target_id,
+        }
+        for item in annotations
+        if item.target_id not in targets[item.target_type]
+    ]
+    by_label: dict[str, int] = {}
+    by_value: dict[str, int] = {}
+    for item in annotations:
+        by_label[item.label] = by_label.get(item.label, 0) + 1
+        key = f"{item.label}:{item.value}"
+        by_value[key] = by_value.get(key, 0) + 1
+    valid_count = len(annotations) - len(orphaned)
+    return {
+        "count": len(annotations),
+        "valid_target_count": valid_count,
+        "orphan_count": len(orphaned),
+        "target_coverage_pct": _pct(valid_count, len(annotations)),
+        "by_label": dict(sorted(by_label.items())),
+        "by_value": dict(sorted(by_value.items())),
+        "orphaned": orphaned,
+    }
+
+
+def evaluate_report(
+    report: Report,
+    *,
+    fixture: str | None = None,
+    annotations: list[Annotation] | None = None,
+    annotation_fixture: str | None = None,
+) -> dict[str, Any]:
     """评测一个已经通过 ``Report`` 契约校验的报告。"""
 
     citations = _citation_metrics(report)
     sources = _source_metrics(report)
     events = _event_metrics(report)
     security = _security_metrics(report)
+    annotation_metrics = _annotation_metrics(report, annotations or [])
     checks = {
         "schema_valid": True,
         "citations_present": citations["overall_pct"] == 100.0,
@@ -179,6 +228,7 @@ def evaluate_report(report: Report, *, fixture: str | None = None) -> dict[str, 
         ),
         "unauthorized_action_target_zero": security["unauthorized_action_target"] == 0,
         "metadata_only_quotes_empty": security["metadata_only_quotes_empty"],
+        "annotations_reference_report": annotation_metrics["orphan_count"] == 0,
     }
     return {
         "evaluator_version": EVALUATOR_VERSION,
@@ -196,12 +246,42 @@ def evaluate_report(report: Report, *, fixture: str | None = None) -> dict[str, 
         "source_coverage": sources,
         "event_consistency": events,
         "security": security,
+        "annotations": annotation_metrics,
+        "annotation_fixture": annotation_fixture,
         "checks": checks,
         "passed": all(checks.values()),
     }
 
 
-def evaluate_fixture(path: str | Path) -> dict[str, Any]:
+def _load_annotations(path: str | Path) -> tuple[list[Annotation], list[str]]:
+    """Load exported annotation JSON and return validation errors explicitly."""
+
+    fixture_label = str(path)
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            payload = payload.get("annotations", payload)
+        if not isinstance(payload, list):
+            raise ValueError("annotation fixture must be a JSON array or an object with annotations")
+        annotations: list[Annotation] = []
+        errors: list[str] = []
+        for index, item in enumerate(payload):
+            try:
+                annotations.append(Annotation.model_validate(item))
+            except ValidationError as exc:
+                errors.extend([f"annotations[{index}].{message}" for message in (_error_text(error) for error in exc.errors())])
+        return annotations, errors
+    except FileNotFoundError:
+        return [], [f"annotation fixture not found: {fixture_label}"]
+    except OSError as exc:
+        return [], [f"annotation fixture read failed: {exc}"]
+    except json.JSONDecodeError as exc:
+        return [], [f"invalid annotation JSON at line {exc.lineno}, column {exc.colno}"]
+    except ValueError as exc:
+        return [], [str(exc)]
+
+
+def evaluate_fixture(path: str | Path, *, annotations_path: str | Path | None = None) -> dict[str, Any]:
     """读取并评测 fixture；输入错误也以 JSON 结果返回，不隐式回退到 demo。"""
 
     fixture_path = Path(path)
@@ -219,7 +299,21 @@ def evaluate_fixture(path: str | Path) -> dict[str, Any]:
         return _invalid_result(fixture_label, [f"invalid JSON at line {exc.lineno}, column {exc.colno}"])
     except ValidationError as exc:
         return _invalid_result(fixture_label, [_error_text(error) for error in exc.errors()])
-    return evaluate_report(report, fixture=fixture_label)
+    annotations: list[Annotation] = []
+    annotation_errors: list[str] = []
+    if annotations_path is not None:
+        annotations, annotation_errors = _load_annotations(annotations_path)
+    result = evaluate_report(
+        report,
+        fixture=fixture_label,
+        annotations=annotations,
+        annotation_fixture=str(annotations_path) if annotations_path is not None else None,
+    )
+    result["annotation_schema_valid"] = not annotation_errors
+    result["annotation_schema_errors"] = annotation_errors
+    result["checks"]["annotation_schema_valid"] = not annotation_errors
+    result["passed"] = all(result["checks"].values())
+    return result
 
 
 def _invalid_result(fixture: str, errors: list[str]) -> dict[str, Any]:
@@ -233,6 +327,10 @@ def _invalid_result(fixture: str, errors: list[str]) -> dict[str, Any]:
         "citation_coverage": None,
         "source_coverage": None,
         "event_consistency": None,
+        "annotations": None,
+        "annotation_fixture": None,
+        "annotation_schema_valid": False,
+        "annotation_schema_errors": [],
         "checks": checks,
         "passed": False,
     }
@@ -242,12 +340,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate a Signal Radar report fixture")
     parser.add_argument("--fixture", required=True, type=Path, help="JSON report fixture")
     parser.add_argument("--output", type=Path, help="Write evaluation JSON to a file")
+    parser.add_argument(
+        "--annotations",
+        type=Path,
+        help="Optional exported annotation JSON from /api/annotations/export.json",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    result = evaluate_fixture(args.fixture)
+    result = evaluate_fixture(args.fixture, annotations_path=args.annotations)
     output = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

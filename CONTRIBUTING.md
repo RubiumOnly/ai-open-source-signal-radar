@@ -23,9 +23,13 @@ pip install -e ".[dev,api]"
 python -m pytest -q
 python -m unittest discover -s tests -v
 python -m compileall -q signal_radar tests
+npm --prefix frontend ci --no-audit --no-fund
+npm --prefix frontend run build
 ```
 
 新增采集器时，应优先增加无网络 fixture 测试，并覆盖超时、限流、登录要求、域名白名单和部分成功等状态。
+
+前端工作台位于 `frontend/`，使用 React、TypeScript 和 Vite。`web/` 暂时保留为旧版静态 Replay 回退，不再作为主要产品入口。
 
 ## 数据源约定
 
