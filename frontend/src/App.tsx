@@ -32,8 +32,8 @@ import {
   TerminalSquare,
   XCircle,
 } from 'lucide-react'
-import type { CapabilitiesResponse, Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SchedulerRequest, SchedulerState, SourceStatus } from './types'
-import { cancelRun, createPlan, fetchCapabilities, fetchMarkdown, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchSchedule, fetchTrace, followUp, startRun, startSchedule, stopSchedule, streamRun } from './lib/api'
+import type { Annotation, AnnotationLabel, CapabilitiesResponse, Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SchedulerRequest, SchedulerState, SourceStatus } from './types'
+import { cancelRun, createAnnotation, createPlan, fetchAnnotations, fetchCapabilities, fetchMarkdown, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchSchedule, fetchTrace, followUp, startRun, startSchedule, stopSchedule, streamRun } from './lib/api'
 
 const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变化、安装兼容性和社区反馈'
 
@@ -102,6 +102,18 @@ const schedulerStatusLabels: Record<string, string> = {
   failed: '运行失败',
 }
 
+const annotationLabelLabels: Record<AnnotationLabel, string> = {
+  correctness: '正确性',
+  risk: '风险等级',
+  stance: '立场',
+}
+
+const annotationValueLabels: Record<AnnotationLabel, Record<string, string>> = {
+  correctness: { correct: '正确', partially_correct: '部分正确', incorrect: '不正确', uncertain: '待确认' },
+  risk: { low: '低风险', medium: '中风险', high: '高风险', critical: '严重风险' },
+  stance: { support: '支持', oppose: '反对', neutral: '中性', uncertain: '待确认', mixed: '混合' },
+}
+
 const sentimentLabels: Record<string, string> = {
   positive: '正面',
   negative: '负面',
@@ -144,6 +156,10 @@ function sentimentName(sentiment: string) {
 
 function eventTypeName(type: string) {
   return eventTypeLabels[type] ?? type
+}
+
+function annotationValueName(label: AnnotationLabel, value: string) {
+  return annotationValueLabels[label]?.[value] ?? value
 }
 
 function riskTone(level?: string) {
@@ -195,6 +211,14 @@ function App() {
   const [scheduleIntervalMinutes, setScheduleIntervalMinutes] = useState(60)
   const [scheduleMaxRuns, setScheduleMaxRuns] = useState(3)
   const [scheduleImmediate, setScheduleImmediate] = useState(false)
+  const [annotations, setAnnotations] = useState<Annotation[]>([])
+  const [annotationOpenId, setAnnotationOpenId] = useState<string | null>(null)
+  const [annotationLabel, setAnnotationLabel] = useState<AnnotationLabel>('correctness')
+  const [annotationValue, setAnnotationValue] = useState('correct')
+  const [annotationNote, setAnnotationNote] = useState('')
+  const [reviewer, setReviewer] = useState(() => window.localStorage.getItem('signal-radar-reviewer') ?? '')
+  const [annotationSubmitting, setAnnotationSubmitting] = useState(false)
+  const [annotationError, setAnnotationError] = useState('')
 
   useEffect(() => {
     let mounted = true
@@ -241,6 +265,15 @@ function App() {
     }, 2000)
     return () => window.clearInterval(timer)
   }, [schedule?.status, showSettings])
+
+  useEffect(() => {
+    if (!activeRunId) {
+      setAnnotations([])
+      return
+    }
+    const persistedRun = runHistory.some((run) => run.run_id === activeRunId)
+    fetchAnnotations(persistedRun ? activeRunId : undefined).then(setAnnotations).catch(() => setAnnotations([]))
+  }, [activeRunId, runHistory])
 
   const latestEvents = useMemo(() => [...events].slice(-7).reverse(), [events])
   const traceEvents = useMemo(() => {
@@ -333,6 +366,53 @@ function App() {
       setScheduleError(cause instanceof Error ? cause.message : '调度停止失败，请检查 API Token。')
     } finally {
       setScheduleAction(null)
+    }
+  }
+
+  function saveReviewer(value: string) {
+    setReviewer(value)
+    if (value.trim()) window.localStorage.setItem('signal-radar-reviewer', value.trim())
+    else window.localStorage.removeItem('signal-radar-reviewer')
+  }
+
+  function openAnnotation(evidenceId: string) {
+    setAnnotationOpenId((current) => current === evidenceId ? null : evidenceId)
+    setAnnotationError('')
+    setAnnotationNote('')
+    setAnnotationLabel('correctness')
+    setAnnotationValue('correct')
+  }
+
+  function changeAnnotationLabel(value: AnnotationLabel) {
+    setAnnotationLabel(value)
+    setAnnotationValue(Object.keys(annotationValueLabels[value])[0])
+  }
+
+  async function submitAnnotation(evidenceId: string) {
+    if (!reviewer.trim()) {
+      setAnnotationError('请先填写复核者姓名或标识。')
+      return
+    }
+    setAnnotationSubmitting(true)
+    setAnnotationError('')
+    const persistedRun = activeRunId && runHistory.some((run) => run.run_id === activeRunId) ? activeRunId : undefined
+    try {
+      const created = await createAnnotation({
+        run_id: persistedRun,
+        target_type: 'evidence',
+        target_id: evidenceId,
+        label: annotationLabel,
+        value: annotationValue,
+        note: annotationNote.trim() || undefined,
+        reviewer: reviewer.trim(),
+      })
+      setAnnotations((current) => [created, ...current.filter((item) => item.id !== created.id)])
+      setAnnotationNote('')
+      setAnnotationOpenId(null)
+    } catch (cause) {
+      setAnnotationError(cause instanceof Error ? cause.message : '标注保存失败，请检查 API Token 和目标报告。')
+    } finally {
+      setAnnotationSubmitting(false)
     }
   }
 
@@ -748,10 +828,27 @@ function App() {
         <section className="evidence-section" id="evidence">
           <div className="section-heading">
             <div><span className="eyebrow eyebrow-accent">证据链</span><h2>最近证据</h2></div>
-            <div className="section-heading-actions"><span className="section-note">点击标题打开原文</span><button className="text-action" onClick={exportMarkdown} disabled={!activeRunId}><Download size={14} /> 导出 Markdown</button></div>
+            <div className="section-heading-actions"><span className="section-note">{annotations.length ? `已复核 ${annotations.length} 条` : '点击标题打开原文'}</span><button className="text-action" onClick={exportMarkdown} disabled={!activeRunId}><Download size={14} /> 导出 Markdown</button></div>
           </div>
           <div className="evidence-grid">
-            {(report?.evidence ?? []).slice(0, 6).map((item) => <EvidenceCard evidence={item} key={item.id} />)}
+            {(report?.evidence ?? []).slice(0, 6).map((item) => <EvidenceCard
+              evidence={item}
+              annotations={annotations.filter((annotation) => annotation.target_id === item.id)}
+              open={annotationOpenId === item.id}
+              label={annotationLabel}
+              value={annotationValue}
+              note={annotationNote}
+              reviewer={reviewer}
+              submitting={annotationSubmitting}
+              error={annotationError}
+              onToggle={() => openAnnotation(item.id)}
+              onLabelChange={changeAnnotationLabel}
+              onValueChange={setAnnotationValue}
+              onNoteChange={setAnnotationNote}
+              onReviewerChange={saveReviewer}
+              onSubmit={() => submitAnnotation(item.id)}
+              key={item.id}
+            />)}
             {!report?.evidence?.length && <div className="empty-wide"><BookOpen size={21} /><span>证据会保留来源 URL、摘录、时间和内容哈希。</span></div>}
           </div>
         </section>
@@ -896,8 +993,57 @@ function FindingRow({ event }: { event: Event }) {
   return <article className={`finding-row finding-${riskTone(event.risk_level)}`}><div className="finding-marker" /><div className="finding-main"><div className="finding-title"><strong>{event.title}</strong><span>{event.category}</span><span className={`finding-sentiment finding-sentiment-${event.sentiment}`}>{sentimentName(event.sentiment)}</span></div><p>{event.summary || '报告没有提供额外摘要。'} <span className="finding-evidence-count">{event.evidence_ids.length} 条证据</span></p></div><div className="finding-score"><strong>{Math.round(event.risk_score)}</strong><span>/ 100</span><small>{formatDate(event.occurred_at)}</small></div><ChevronRight size={17} className="finding-arrow" /></article>
 }
 
-function EvidenceCard({ evidence }: { evidence: Report['evidence'][number] }) {
-  return <article className="evidence-card"><div className="evidence-card-top"><span className="evidence-source">{sourceName(evidence.source)}</span><span className="evidence-confidence">{Math.round(evidence.confidence * 100)}%</span></div><a href={evidence.url} target="_blank" rel="noreferrer"><strong>{evidence.title || '未命名证据'}</strong><ArrowUpRight size={14} /></a><p>{evidence.quote || '只有元数据，暂无可引用正文。'}</p><div className="evidence-meta"><span>{formatDate(evidence.published_at)}</span><span>{evidence.evidence_level}</span></div></article>
+function EvidenceCard({
+  evidence,
+  annotations,
+  open,
+  label,
+  value,
+  note,
+  reviewer,
+  submitting,
+  error,
+  onToggle,
+  onLabelChange,
+  onValueChange,
+  onNoteChange,
+  onReviewerChange,
+  onSubmit,
+}: {
+  evidence: Report['evidence'][number]
+  annotations: Annotation[]
+  open: boolean
+  label: AnnotationLabel
+  value: string
+  note: string
+  reviewer: string
+  submitting: boolean
+  error: string
+  onToggle: () => void
+  onLabelChange: (value: AnnotationLabel) => void
+  onValueChange: (value: string) => void
+  onNoteChange: (value: string) => void
+  onReviewerChange: (value: string) => void
+  onSubmit: () => void
+}) {
+  return <article className={`evidence-card ${open ? 'evidence-card-open' : ''}`}>
+    <div className="evidence-card-top"><span className="evidence-source">{sourceName(evidence.source)}</span><span className="evidence-confidence">{Math.round(evidence.confidence * 100)}%</span></div>
+    <a href={evidence.url} target="_blank" rel="noreferrer"><strong>{evidence.title || '未命名证据'}</strong><ArrowUpRight size={14} /></a>
+    <p>{evidence.quote || '只有元数据，暂无可引用正文。'}</p>
+    <div className="evidence-meta"><span>{formatDate(evidence.published_at)}</span><span>{evidence.evidence_level}</span><button className="evidence-review-toggle" onClick={onToggle} aria-expanded={open}>{annotations.length ? `已标注 ${annotations.length}` : '标注'} </button></div>
+    {annotations.length > 0 && <div className="annotation-history">{annotations.slice(0, 2).map((annotation) => <span key={annotation.id}>{annotationLabelLabels[annotation.label]} · {annotationValueName(annotation.label, annotation.value)}</span>)}</div>}
+    {open && <div className="annotation-form">
+      <div className="annotation-form-heading"><strong>人工复核</strong><span>不会改写原始报告</span></div>
+      <div className="annotation-fields">
+        <label><span>复核维度</span><select value={label} onChange={(event) => onLabelChange(event.target.value as AnnotationLabel)}>{(Object.keys(annotationLabelLabels) as AnnotationLabel[]).map((item) => <option value={item} key={item}>{annotationLabelLabels[item]}</option>)}</select></label>
+        <label><span>判断</span><select value={value} onChange={(event) => onValueChange(event.target.value)}>{Object.entries(annotationValueLabels[label]).map(([item, text]) => <option value={item} key={item}>{text}</option>)}</select></label>
+      </div>
+      <label><span>复核者</span><input value={reviewer} onChange={(event) => onReviewerChange(event.target.value)} placeholder="例如：local-reviewer" /></label>
+      <label><span>备注（可选）</span><textarea value={note} onChange={(event) => onNoteChange(event.target.value)} placeholder="记录原文是否直接支持该判断" rows={3} /></label>
+      {error && <div className="annotation-error" role="alert">{error}</div>}
+      <div className="annotation-actions"><button className="primary-action" onClick={onSubmit} disabled={submitting} aria-busy={submitting}>{submitting ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} 保存标注</button><button className="text-action" onClick={onToggle}>取消</button></div>
+    </div>}
+  </article>
 }
 
 export default App

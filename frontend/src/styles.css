@@ -343,6 +343,24 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .evidence-card a svg { flex: 0 0 auto; color: var(--accent); }
 .evidence-card p { display: -webkit-box; margin-top: 12px; overflow: hidden; color: var(--ink-2); font-size: 12px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .evidence-meta { justify-content: flex-start; gap: 12px; margin-top: 15px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
+.evidence-review-toggle { margin-left: auto; padding: 0; border: 0; color: var(--accent); background: transparent; font: 10px/1.2 var(--mono); }
+.evidence-review-toggle:hover, .evidence-review-toggle:focus-visible { color: var(--accent-deep); text-decoration: underline; outline: none; }
+.evidence-card-open { border-color: #bdd6c4; }
+.annotation-history { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.annotation-history span { padding: 4px 6px; border: 1px solid #d8e4dc; border-radius: 6px; color: var(--accent-deep); background: var(--accent-faint); font: 9px/1.2 var(--mono); }
+.annotation-form { display: grid; gap: 10px; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--line-soft); }
+.annotation-form-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.annotation-form-heading strong { color: var(--ink); font-size: 12px; }
+.annotation-form-heading span { color: var(--ink-3); font: 9px/1.2 var(--mono); }
+.annotation-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.annotation-form label { display: grid; gap: 6px; }
+.annotation-form label > span { color: var(--ink-3); font: 9px/1.2 var(--mono); }
+.annotation-form input, .annotation-form select { height: 34px; font-size: 11px; }
+.annotation-form textarea { width: 100%; padding: 8px 9px; resize: vertical; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--ink); background: var(--surface); font-size: 11px; line-height: 1.45; outline: none; }
+.annotation-form textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(92, 138, 114, .14); }
+.annotation-error { padding: 8px 9px; border: 1px solid #f0cfc8; border-radius: 8px; color: #9c4b3c; background: var(--coral-soft); font-size: 10px; line-height: 1.45; }
+.annotation-actions { display: flex; align-items: center; gap: 12px; }
+.annotation-actions .primary-action { min-height: 34px; padding: 0 11px; font-size: 11px; box-shadow: none; }
 .footer { display: flex; justify-content: space-between; gap: 16px; width: min(100%, 1480px); margin: 44px auto 0; padding: 18px clamp(28px, 4.5vw, 68px) 27px; color: var(--ink-3); border-top: 1px solid var(--line); font: 10px/1.3 var(--mono); }
 
 .settings-layer { position: fixed; inset: 0; z-index: 8; display: flex; align-items: stretch; justify-content: flex-end; padding: 18px; background: rgba(33, 51, 45, .16); animation: layer-in .2s ease-out; }

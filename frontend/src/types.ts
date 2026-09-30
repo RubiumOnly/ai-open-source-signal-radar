@@ -194,6 +194,30 @@ export interface SchedulerRequest {
   run_immediately: boolean
 }
 
+export type AnnotationLabel = 'stance' | 'risk' | 'correctness'
+
+export interface Annotation {
+  id: string
+  run_id?: string | null
+  target_type: 'evidence' | 'claim' | 'event'
+  target_id: string
+  label: AnnotationLabel
+  value: string
+  note?: string | null
+  reviewer: string
+  timestamp: string
+}
+
+export interface AnnotationRequest {
+  run_id?: string | null
+  target_type: 'evidence' | 'claim' | 'event'
+  target_id: string
+  label: AnnotationLabel
+  value: string
+  note?: string | null
+  reviewer: string
+}
+
 export interface Run {
   run_id: string
   mode: RunMode

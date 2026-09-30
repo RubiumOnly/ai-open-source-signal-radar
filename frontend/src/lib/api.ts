@@ -1,4 +1,4 @@
-import type { CapabilitiesResponse, FollowUpRequest, MetricsResponse, PlanResponse, Report, ResearchPlan, Run, RunEvent, RunResponse, RunMode, ResearchMode, SchedulerRequest, SchedulerState } from '../types'
+import type { Annotation, AnnotationRequest, CapabilitiesResponse, FollowUpRequest, MetricsResponse, PlanResponse, Report, ResearchPlan, Run, RunEvent, RunResponse, RunMode, ResearchMode, SchedulerRequest, SchedulerState } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -119,6 +119,19 @@ export function startSchedule(payload: SchedulerRequest): Promise<SchedulerState
 
 export function stopSchedule(): Promise<SchedulerState> {
   return request<SchedulerState>('/api/schedule/stop', { method: 'POST' })
+}
+
+export function fetchAnnotations(runId?: string): Promise<Annotation[]> {
+  const query = runId ? `?run_id=${encodeURIComponent(runId)}` : ''
+  return request<Annotation[]>(`/api/annotations${query}`)
+}
+
+export function createAnnotation(payload: AnnotationRequest): Promise<Annotation> {
+  return request<Annotation>('/api/annotations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function fetchMarkdown(runId: string): Promise<string> {
