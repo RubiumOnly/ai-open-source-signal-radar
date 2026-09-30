@@ -10,6 +10,8 @@
 
 如果研究简报中粘贴了明确的公开页面 URL，计划预览会把它列为待确认目标，再交给来源白名单校验。
 登录来源不会因为 URL 被粘贴就自动放行；CSDN、知乎等页面仍需用户在本地人工授权，并且只能执行只读采集。
+非 GitHub 仓库链接会自动把 `browser_use` 放进待确认来源；普通 GitHub 仓库根链接仍只使用结构化 API，
+而 GitHub 的具体 Issue、PR 或 Discussion 页面才会额外请求浏览器回退。
 
 工作台中的 Trace 回放区域会保留当前运行的完整结构化事件，可按全部、采集或完成阶段筛选，
 并展示来源、页数、延迟、缓存命中和新增/重复记录。它只回放审计字段，不暴露内部思维链。
@@ -39,7 +41,7 @@ React Workbench / API
       |
 Run Orchestrator  -- 研究计划、运行 ID、预算、并行、取消、只读策略
       |
-来源适配器：GitHub API（Releases/Issues，按需 Pull Requests/Discussions） / RSS 与 Atom 官方博客 / Hacker News Algolia / Replay fixture / Browser Use 动态网页
+来源适配器：GitHub API（Releases/Issues，按需 Pull Requests/Discussions） / RSS 与 Atom 官方博客 / Hacker News Algolia / Reddit 公共 JSON / Replay fixture / Browser Use 动态网页
       |
 Browser Use 回退：动态页面、跨页上下文、授权后的本地会话
       |
@@ -562,16 +564,16 @@ tests/              不需要网络/API Key 的契约与单元测试
 
 ## 当前扩展版范围
 
-- 已完成多源采集：GitHub、RSS/Atom、Hacker News Algolia 和 Browser Use 动态页面；
+- 已完成多源采集：GitHub（含按需 PR/Discussions）、RSS/Atom、Hacker News Algolia、Reddit 公共 JSON 和 Browser Use 动态页面；
 - 已完成证据链、趋势、主题、关键事件、风险评分与 Markdown 导出；
 - 已完成 SQLite 运行历史、预算、取消接口、域名白名单和 Prompt Injection 回归门禁；
 - 已完成离线评测 harness、失败样例、GitHub Actions 质量门禁和桌面/移动截图；
 - 已完成默认关闭的本地定时调度：可配置来源、时间间隔和最大次数，每次运行写入 SQLite 历史并支持停止；
-- 已完成有界并行来源编排、研究计划预览、后台运行和结构化 SSE 事件；
-- 已启动 React 工作台重构：研究简报、来源预览、运行监控、风险信号和证据卡片已接入 Replay/API；
+- 已完成有界并行来源编排、研究计划预览、后台运行、结构化 SSE 事件、增量缓存、分页和来源质量指标；
+- 已完成 React 工作台：研究简报、来源预览、运行监控、独立 Trace 回放、风险信号、证据卡片、运行历史和协作式取消均已接入 Replay/API；
 - 登录来源仍保持只读和人工授权边界，不绕过验证码、付费墙或访问控制。
 
-后续重构重点是完善独立 Trace 视图、更多确定性页面适配器和授权浏览器 Worker；现有安全、预算、取消、标注、缓存和离线评测能力必须保持。
+后续重构重点是增加更多确定性页面适配器、完善授权浏览器 Worker 和持续评测基准；现有安全、预算、取消、标注、缓存、Trace 和离线评测能力必须保持。
 
 ## 设计与工程要点
 

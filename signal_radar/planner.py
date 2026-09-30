@@ -89,6 +89,20 @@ def _urls(query: str) -> list[str]:
     return urls[:20]
 
 
+def _needs_browser_url(url: str) -> bool:
+    """判断明确 URL 是否超出普通 GitHub 仓库元数据来源的覆盖范围。"""
+
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return True
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if hostname != "github.com" and not hostname.endswith(".github.com"):
+        return True
+    path_parts = [part for part in parsed.path.split("/") if part]
+    return len(path_parts) > 2
+
+
 def _sources(query: str, explicit: list[str]) -> list[str]:
     normalised = [str(item).strip().lower().replace("-", "_") for item in explicit if str(item).strip()]
     if normalised:
@@ -105,6 +119,8 @@ def build_plan(request: PlanRequest) -> ResearchPlan:
     sources = _sources(query, request.sources)
     focus = _focus(query)
     urls = _urls(query)
+    if urls and any(_needs_browser_url(url) for url in urls) and "browser_use" not in sources:
+        sources.append("browser_use")
     days = _window_days(query, request.window_days)
     url_note = f"，包含 {len(urls)} 个明确页面" if urls else ""
     explanation = (

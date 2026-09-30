@@ -39,6 +39,12 @@ class PlannerTests(unittest.TestCase):
         ))
         self.assertEqual(plan.urls, [])
 
+    def test_explicit_deep_github_url_selects_browser_use_without_repo_root_overhead(self) -> None:
+        detail = build_plan(PlanRequest(query="分析 https://github.com/acme/tool/issues/42"))
+        self.assertIn("browser_use", detail.sources)
+        root = build_plan(PlanRequest(query="分析 https://github.com/acme/tool"))
+        self.assertNotIn("browser_use", root.sources)
+
 
 if __name__ == "__main__":
     unittest.main()
