@@ -362,6 +362,103 @@ class GitHubSourceAdapter:
 
     fetch = collect
 
+    def collect_pull_requests(
+        self,
+        repository: str = "browser-use/browser-use",
+        *,
+        limit: int = 20,
+        since: datetime | None = None,
+    ) -> SourceFetchResult:
+        """按需读取公开 Pull Request 元数据，不默认增加 GitHub 请求量。"""
+
+        parsed = _normalise_repository(repository)
+        if not parsed:
+            return SourceFetchResult(status=SourceStatus(
+                source="GitHub Pull Requests", source_type="first_party", status="error",
+                access_status="error", detail="repository must be owner/name or a GitHub URL",
+                error="invalid_repository",
+            ))
+        owner, name = parsed
+        if since and since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        bounded_limit = max(1, min(int(limit), self.max_limit))
+        endpoint = f"{self.base_url}/repos/{quote(owner)}/{quote(name)}/pulls?state=all&sort=updated&direction=desc&per_page={bounded_limit}"
+        items, status_code, errors, latency, pages, cache_hit = self._request_pages(
+            endpoint,
+            limit=bounded_limit,
+            cache_prefix=f"github:{owner}/{name}:pulls",
+            since=since,
+        )
+        articles: list[Article] = []
+        evidence: list[Evidence] = []
+        claims: list[Claim] = []
+        events: list[Event] = []
+        duplicates = 0
+        candidates = 0
+        cache_key = f"github:{owner}/{name}:pulls"
+        for item in items:
+            published = _parse_time(item.get("updated_at") or item.get("created_at"))
+            if since and published and published < since:
+                continue
+            url = str(item.get("html_url") or "")
+            title = str(item.get("title") or "GitHub pull request")
+            body = str(item.get("body") or "").strip()
+            article = self._article(
+                key=f"pull:{item.get('id') or url}",
+                url=url,
+                title=title,
+                source="GitHub Pull Requests",
+                source_type="first_party",
+                text=f"{title}\n{body}".strip(),
+                published=published,
+                tags=["pull_request"],
+            )
+            candidates += 1
+            if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
+                duplicates += 1
+                continue
+            article.metadata.update({
+                "collector": "github_api",
+                "state": item.get("state"),
+                "merged_at": item.get("merged_at"),
+                "draft": item.get("draft"),
+            })
+            item_result = self._analysis(article, body or title, category="pull_request", risk_score=20.0)
+            mapped_article, ev, claim, event = item_result
+            articles.append(mapped_article)
+            evidence.append(ev)
+            claims.append(claim)
+            events.append(event)
+            if len(articles) >= bounded_limit:
+                break
+        errors = [error for error in errors if error]
+        status_name, access_name = _github_status(status_code, bool(errors))
+        detail = f"{len(articles)} records from {owner}/{name} pull requests"
+        if errors:
+            detail += "; " + "; ".join(errors)[:240]
+        return SourceFetchResult(
+            status=SourceStatus(
+                source="GitHub Pull Requests",
+                source_type="first_party",
+                status=status_name,
+                access_status=access_name,
+                records=len(articles),
+                detail=detail,
+                error="; ".join(errors)[:500] if errors else None,
+                latency_ms=latency,
+                authenticated=bool(self.token),
+                pages=pages,
+                cache_hit=cache_hit if self.cache else False,
+                new_records=len(articles),
+                duplicate_records=duplicates,
+                total_candidates=candidates,
+            ),
+            articles=articles,
+            claims=claims,
+            events=events,
+            evidence=evidence,
+        )
+
     def _release_record(
         self, item: dict[str, Any], *, since: datetime | None
     ) -> tuple[Article | None, Evidence | None, Claim | None, Event | None]:

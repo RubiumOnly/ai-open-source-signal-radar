@@ -294,6 +294,12 @@ async def _live_report_async(
 
     if "github" in requested_sources or "github_api" in requested_sources:
         jobs.append(("GitHub", lambda: github.collect(repository, limit=payload.limit, since=since)))
+    if "github_prs" in requested_sources or "github_pull_requests" in requested_sources or "pull_requests" in requested_sources:
+        collect_prs = getattr(github, "collect_pull_requests", None)
+        if callable(collect_prs):
+            jobs.append(("GitHub Pull Requests", lambda: collect_prs(repository, limit=payload.limit, since=since)))
+        else:
+            jobs.append(("GitHub Pull Requests", lambda: disabled("GitHub Pull Requests", "first_party", "GitHub PR adapter is not configured")))
     if "browser_use" in requested_sources or "browser" in requested_sources or "dynamic" in requested_sources:
         urls = list(payload.urls) or [
             f"https://github.com/{repository}/discussions",

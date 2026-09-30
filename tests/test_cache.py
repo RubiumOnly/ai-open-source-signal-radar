@@ -93,6 +93,30 @@ class CacheTests(unittest.TestCase):
         self.assertIn("page=1", requests[1])
         self.assertEqual(result.status.total_candidates, 1)
 
+    def test_github_pull_requests_are_opt_in_and_traceable(self) -> None:
+        payload = [{
+            "id": 42,
+            "html_url": "https://github.com/org/repo/pull/42",
+            "title": "Improve retry handling",
+            "body": "Document retry behavior.",
+            "updated_at": "2026-09-29T00:00:00Z",
+            "state": "open",
+            "draft": False,
+        }]
+
+        def opener(request, timeout):
+            self.assertIn("/pulls?", request.full_url)
+            self.assertGreater(timeout, 0)
+            return _Response(payload)
+
+        result = GitHubSourceAdapter(opener=opener).collect_pull_requests(
+            "org/repo", limit=5, since=datetime(2026, 9, 1, tzinfo=timezone.utc)
+        )
+        self.assertEqual(result.status.source, "GitHub Pull Requests")
+        self.assertEqual(result.status.records, 1)
+        self.assertEqual(result.articles[0].metadata["state"], "open")
+        self.assertEqual(result.claims[0].claim_type, "pull_request")
+
 
 if __name__ == "__main__":
     unittest.main()

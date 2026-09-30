@@ -23,6 +23,9 @@ CancelCallback = Callable[[str], bool]
 _ALLOWED_SOURCES = {
     "github",
     "github_api",
+    "github_prs",
+    "github_pull_requests",
+    "pull_requests",
     "rss",
     "feed",
     "official",
