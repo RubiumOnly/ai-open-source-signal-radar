@@ -8,6 +8,7 @@ import {
   Check,
   ChevronRight,
   Clock3,
+  Download,
   FileSearch,
   FolderGit2,
   Gauge,
@@ -28,7 +29,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import type { CapabilitiesResponse, Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SourceStatus } from './types'
-import { cancelRun, createPlan, fetchCapabilities, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchTrace, followUp, startRun, streamRun } from './lib/api'
+import { cancelRun, createPlan, fetchCapabilities, fetchMarkdown, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchTrace, followUp, startRun, streamRun } from './lib/api'
 
 const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变化、安装兼容性和社区反馈'
 
@@ -225,6 +226,25 @@ function App() {
       setError('已请求取消当前运行，等待来源适配器完成收尾。')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '取消请求失败')
+    }
+  }
+
+  async function exportMarkdown() {
+    if (!activeRunId) {
+      setError('请先完成一次运行，再导出报告。')
+      return
+    }
+    try {
+      const markdown = await fetchMarkdown(activeRunId)
+      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `signal-radar-${activeRunId}.md`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '报告导出失败')
     }
   }
 
@@ -492,7 +512,7 @@ function App() {
         <section className="evidence-section" id="evidence">
           <div className="section-heading">
             <div><span className="eyebrow eyebrow-accent">TRACEABLE SOURCES</span><h2>最近证据</h2></div>
-            <span className="section-note">点击标题打开原文</span>
+            <div className="section-heading-actions"><span className="section-note">点击标题打开原文</span><button className="text-action" onClick={exportMarkdown} disabled={!activeRunId}><Download size={14} /> 导出 Markdown</button></div>
           </div>
           <div className="evidence-grid">
             {(report?.evidence ?? []).slice(0, 6).map((item) => <EvidenceCard evidence={item} key={item.id} />)}

@@ -65,6 +65,7 @@ h2 { margin-top: 7px; font-size: 18px; font-weight: 650; letter-spacing: -.01em;
 .brief-section, .overview-section, .workspace-section, .trace-section, .history-section, .findings-section, .insights-section, .evidence-section { padding: 35px 50px 0; }
 .brief-section { padding-top: 39px; }
 .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
+.section-heading-actions { display: flex; align-items: center; gap: 14px; }
 .section-index, .section-note, .run-id { color: var(--ink-3); font: 10px/1.4 var(--mono); }
 .run-id { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-actions { display: flex; align-items: center; gap: 13px; }

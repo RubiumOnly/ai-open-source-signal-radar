@@ -105,4 +105,15 @@ export function fetchCapabilities(): Promise<CapabilitiesResponse> {
   return request<CapabilitiesResponse>('/api/capabilities')
 }
 
+export async function fetchMarkdown(runId: string): Promise<string> {
+  const response = await fetch(`${API_BASE}/api/runs/${encodeURIComponent(runId)}/markdown`, {
+    headers: { Accept: 'text/markdown', ...headers() },
+  })
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(detail || `API ${response.status}`)
+  }
+  return response.text()
+}
+
 export { API_BASE }
