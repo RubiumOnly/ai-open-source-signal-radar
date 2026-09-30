@@ -207,6 +207,8 @@ POST /api/runs/{run_id}/follow-up      基于已有报告创建有界补查
 GET  /api/runs/{run_id}                查询运行和报告
 ```
 
+工作台的“运行历史”直接读取 SQLite 运行记录。选择某次运行后，页面会恢复该运行的报告、来源状态和结构化事件；服务重启后仍可回放，不依赖进程内缓存。
+
 Browser Use 动态采集是显式开启的可选路径。先安装额外依赖，在本地环境变量中配置模型 Key，
 再把 `SIGNAL_RADAR_BROWSER_ENABLED` 和 `SIGNAL_RADAR_BROWSER_RUN_LIVE` 都设为 `true`：
 

@@ -25,8 +25,8 @@ import {
   TerminalSquare,
   XCircle,
 } from 'lucide-react'
-import type { Event, Report, ResearchMode, ResearchPlan, RunEvent, RunMode, SourceStatus } from './types'
-import { createPlan, fetchReport, fetchRun, fetchTrace, followUp, startRun, streamRun } from './lib/api'
+import type { Event, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SourceStatus } from './types'
+import { createPlan, fetchReport, fetchRun, fetchRuns, fetchTrace, followUp, startRun, streamRun } from './lib/api'
 
 const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变化、安装兼容性和社区反馈'
 
@@ -99,9 +99,12 @@ function App() {
   const [token, setToken] = useState(() => window.localStorage.getItem('signal-radar-api-token') ?? '')
   const [showSettings, setShowSettings] = useState(false)
   const [followUpQuery, setFollowUpQuery] = useState('')
+  const [runHistory, setRunHistory] = useState<Run[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   useEffect(() => {
     fetchReport().then(setReport).catch(() => setError('API 尚未启动，运行 Replay 后即可加载报告。'))
+    refreshHistory()
   }, [])
 
   const latestEvents = useMemo(() => [...events].slice(-7).reverse(), [events])
@@ -110,6 +113,17 @@ function App() {
     () => [...(report?.events ?? [])].sort((a, b) => b.risk_score - a.risk_score).slice(0, 5),
     [report],
   )
+
+  async function refreshHistory() {
+    setHistoryLoading(true)
+    try {
+      setRunHistory(await fetchRuns())
+    } catch {
+      // 本地未启用认证时正常加载；共享 API 没有 Token 时仅隐藏历史列表。
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
 
   async function makePlan() {
     if (!query.trim()) {
@@ -139,6 +153,7 @@ function App() {
       await streamRun(started.run.run_id, (event) => setEvents((current) => [...current, event]))
       const finished = await fetchRun(started.run.run_id)
       setReport(finished.report ?? null)
+      await refreshHistory()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '运行失败，请检查 API、来源配置和权限。')
     } finally {
@@ -161,6 +176,7 @@ function App() {
       const finished = await fetchRun(started.run.run_id)
       setReport(finished.report ?? null)
       setFollowUpQuery('')
+      await refreshHistory()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '补查失败，请检查运行状态和来源权限。')
     } finally {
@@ -174,6 +190,19 @@ function App() {
       setEvents(await fetchTrace(activeRunId))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Trace 回放加载失败')
+    }
+  }
+
+  async function selectHistoryRun(runId: string) {
+    setError('')
+    try {
+      const selected = await fetchRun(runId)
+      setActiveRunId(runId)
+      setReport(selected.report ?? null)
+      setEvents(await fetchTrace(runId))
+      jumpTo('workspace')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '历史运行加载失败')
     }
   }
 
@@ -201,7 +230,7 @@ function App() {
         <nav className="nav-group" aria-label="主导航">
           <span className="nav-caption">工作台</span>
           <button className="nav-item nav-item-active" onClick={() => jumpTo('overview')}><LayoutDashboard size={17} /> 总览 <span className="nav-dot" /></button>
-          <button className="nav-item" onClick={() => jumpTo('workspace')}><FileSearch size={17} /> 运行历史</button>
+          <button className="nav-item" onClick={() => jumpTo('history')}><FileSearch size={17} /> 运行历史</button>
           <button className="nav-item" onClick={() => jumpTo('evidence')}><BookOpen size={17} /> 证据库</button>
           <span className="nav-caption nav-caption-spaced">系统</span>
           <button className="nav-item" onClick={() => jumpTo('workspace')}><ShieldCheck size={17} /> 来源与权限</button>
@@ -337,6 +366,18 @@ function App() {
           </div>
         </section>
 
+        <section className="history-section" id="history">
+          <div className="section-heading">
+            <div><span className="eyebrow">PERSISTED RUNS</span><h2>运行历史</h2></div>
+            <button className="text-action" onClick={refreshHistory} disabled={historyLoading}><RefreshCw size={14} /> 刷新</button>
+          </div>
+          <div className="history-list">
+            {runHistory.length ? runHistory.map((run) => <HistoryRow key={run.run_id} run={run} active={run.run_id === activeRunId} onSelect={selectHistoryRun} />) : (
+              <div className="empty-wide"><Clock3 size={21} /><span>{historyLoading ? '正在读取历史运行…' : '完成一次运行后，这里会保留可回放记录。'}</span></div>
+            )}
+          </div>
+        </section>
+
         <section className="findings-section">
           <div className="section-heading">
             <div><span className="eyebrow">EVIDENCE LED FINDINGS</span><h2>关键风险信号</h2></div>
@@ -384,6 +425,17 @@ function RunEventRow({ event }: { event: RunEvent }) {
 function SourceRow({ source }: { source: SourceStatus }) {
   const status = sourceStatus(source)
   return <div className="source-row"><div className={`source-signal source-signal-${statusTone(status)}`} /><div className="source-name"><strong>{sourceName(source.source)}</strong><span>{source.source_type}</span></div><span className={`source-status source-status-${statusTone(status)}`}>{statusLabels[status] ?? status}</span><span className="source-count">{source.records}</span></div>
+}
+
+function HistoryRow({ run, active, onSelect }: { run: Run; active: boolean; onSelect: (runId: string) => void }) {
+  const tone = run.status === 'completed' ? 'ok' : run.status === 'partial' ? 'warn' : run.status === 'failed' || run.status === 'cancelled' ? 'danger' : 'warn'
+  return <button className={`history-row ${active ? 'history-row-active' : ''}`} onClick={() => onSelect(run.run_id)}>
+    <span className={`history-dot history-dot-${tone}`} />
+    <span className="history-main"><strong>{run.subject || '未命名项目'}</strong><span>{run.run_id} · {run.mode} · {run.window_days} 天</span></span>
+    <span className={`history-status history-status-${tone}`}>{statusLabels[run.status] ?? run.status}</span>
+    <span className="history-date">{formatDate(run.completed_at || run.started_at)}</span>
+    <ChevronRight size={15} />
+  </button>
 }
 
 function FindingRow({ event }: { event: Event }) {

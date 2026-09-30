@@ -108,6 +108,19 @@ export interface RunResponse {
   report?: Report | null
 }
 
+export interface Run {
+  run_id: string
+  mode: RunMode
+  status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled'
+  subject: string
+  window_days: number
+  started_at: string
+  completed_at?: string | null
+  report_id?: string | null
+  error?: string | null
+  budget: { max_steps: number; timeout_seconds: number }
+}
+
 export interface FollowUpRequest {
   query: string
   sources?: string[]
