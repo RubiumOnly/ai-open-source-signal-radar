@@ -134,6 +134,11 @@ export function createAnnotation(payload: AnnotationRequest): Promise<Annotation
   })
 }
 
+export function fetchAnnotationExport(runId?: string): Promise<Annotation[]> {
+  const query = runId ? `?run_id=${encodeURIComponent(runId)}` : ''
+  return request<Annotation[]>(`/api/annotations/export.json${query}`)
+}
+
 export async function fetchMarkdown(runId: string): Promise<string> {
   const response = await fetch(`${API_BASE}/api/runs/${encodeURIComponent(runId)}/markdown`, {
     headers: { Accept: 'text/markdown', ...headers() },
