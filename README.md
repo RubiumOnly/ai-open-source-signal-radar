@@ -1,11 +1,21 @@
 # Signal Radar
 
-**面向 AI 开源项目的证据驱动情报工作台。**
+<p align="center"><strong>面向 AI 开源项目的证据驱动情报工作台</strong></p>
 
-[![CI](https://github.com/RubiumOnly/ai-open-source-signal-radar/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/RubiumOnly/ai-open-source-signal-radar/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
-[![React](https://img.shields.io/badge/React-18-149ECA?logo=react&logoColor=white)](frontend/package.json)
-[![License](https://img.shields.io/badge/License-MIT-5C8A72)](LICENSE)
+<p align="center">
+  <a href="https://github.com/RubiumOnly/ai-open-source-signal-radar/actions/workflows/ci.yml"><img src="https://github.com/RubiumOnly/ai-open-source-signal-radar/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python" /></a>
+  <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white" alt="FastAPI" /></a>
+  <a href="https://docs.pydantic.dev/"><img src="https://img.shields.io/badge/Pydantic-2-E92063?logo=pydantic&logoColor=white" alt="Pydantic 2" /></a>
+  <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-18-149ECA?logo=react&logoColor=white" alt="React" /></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.6%2B-3178C6?logo=typescript&logoColor=white" alt="TypeScript" /></a>
+  <a href="https://vite.dev/"><img src="https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white" alt="Vite" /></a>
+  <a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/SQLite-local-003B57?logo=sqlite&logoColor=white" alt="SQLite" /></a>
+  <a href="https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events"><img src="https://img.shields.io/badge/SSE-structured%20events-5C8A72" alt="Server-sent events" /></a>
+  <a href="https://github.com/browser-use/browser-use"><img src="https://img.shields.io/badge/Browser%20Use-optional-FF6B35" alt="Browser Use optional" /></a>
+  <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-Replay-2496ED?logo=docker&logoColor=white" alt="Docker" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-5C8A72" alt="MIT License" /></a>
+</p>
 
 [快速开始](#快速开始) · [使用指南](docs/USAGE.md) · [API 参考](docs/API.md) · [评测](docs/EVALUATION.md) · [更新记录](CHANGELOG.md)
 
@@ -30,6 +40,33 @@ Signal Radar 汇总 GitHub 版本与开发者反馈、公开技术文章及社�
 | 增量研究 | 有界分页、条件请求和记录指纹，保留缓存命中及新增/重复指标 |
 | 归档与复核 | SQLite 历史、Markdown/JSON 导出、证据标注与标注集导出 |
 | 定时监控 | 显式启动、限定间隔与次数、状态查询和停止，每次运行写入历史 |
+
+## 功能状态
+
+### 当前版本
+
+- [x] 自然语言研究计划：解析项目、时间窗口、主题和待确认来源。
+- [x] Replay 工作流：使用固定 fixture 离线运行，不需要模型 Key 或外部采集。
+- [x] Live 工作流：GitHub、RSS/Atom、Hacker News、Reddit、Stack Exchange 等只读来源。
+- [x] Browser Use 动态页面：显式开关、域名白名单、步数/时间预算和本地授权 Profile。
+- [x] 结构化运行：后台任务、SSE 事件、来源指标、部分成功和协作式取消。
+- [x] Trace 与历史：SQLite 持久化、历史恢复、Trace 回放和运行筛选。
+- [x] 增量缓存：ETag/Last-Modified、分页、记录指纹和新增/重复统计。
+- [x] 报告导出：持久化运行支持 Markdown/JSON，Replay 预览支持 JSON 快照。
+- [x] 定时监控：有界间隔、最大次数、立即运行、状态轮询和停止。
+- [x] 人工复核：证据正确性、风险等级、立场标注及 JSON 标注集导出。
+- [x] 安全门禁：Prompt Injection fixture、metadata-only 降级和未授权动作检查。
+
+### 规划中
+
+以下项目目前**尚未实现**，仅作为公开路线记录：
+
+- [ ] 服务重启后自动恢复定时计划。
+- [ ] 多用户账号、角色权限和租户级数据隔离。
+- [ ] 分布式任务队列与多 Worker 调度。
+- [ ] Browser Use 常驻 Worker 池和真实站点持续集成测试。
+- [ ] 更多确定性页面适配器及站点级质量基准。
+- [ ] Claims / Events 的完整前端人工复核界面。
 
 ### 数据来源
 
