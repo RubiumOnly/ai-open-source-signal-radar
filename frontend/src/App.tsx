@@ -300,6 +300,7 @@ function App() {
       return true
     })
   }, [historyFilter, historyQuery, runHistory])
+  const activeRunPersisted = Boolean(activeRunId && runHistory.some((run) => run.run_id === activeRunId))
 
   async function refreshHistory() {
     setHistoryLoading(true)
@@ -520,6 +521,10 @@ function App() {
       setError('请先完成一次运行，再导出报告。')
       return
     }
+    if (!activeRunPersisted) {
+      setError('当前是 Replay 预览报告；请先选择一条历史运行，或导出 JSON 快照。')
+      return
+    }
     try {
       const markdown = await fetchMarkdown(activeRunId)
       const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
@@ -535,12 +540,23 @@ function App() {
   }
 
   async function exportJson() {
-    if (!activeRunId) {
+    if (!activeRunId && !report) {
       setError('请先完成一次运行，再导出报告。')
       return
     }
     try {
-      const payload = await fetchRun(activeRunId)
+      const payload = activeRunId && activeRunPersisted
+        ? await fetchRun(activeRunId)
+        : {
+            run: {
+              run_id: report?.run_id ?? activeRunId ?? 'replay-preview',
+              mode: 'replay' as const,
+              status: 'completed' as const,
+              subject: report?.project.repository ?? 'Replay 预览',
+              window_days: report?.window_days ?? 0,
+            },
+            report,
+          }
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
@@ -864,7 +880,7 @@ function App() {
         <section className="evidence-section" id="evidence">
           <div className="section-heading">
             <div><span className="eyebrow eyebrow-accent">证据链</span><h2>最近证据</h2></div>
-            <div className="section-heading-actions"><span className="section-note">{annotations.length ? `已复核 ${annotations.length} 条` : '点击标题打开原文'}</span><button className="text-action" onClick={exportAnnotations} disabled={!annotations.length}><FileJson size={14} /> 导出标注</button><button className="text-action" onClick={exportJson} disabled={!activeRunId}><FileJson size={14} /> 导出 JSON</button><button className="text-action" onClick={exportMarkdown} disabled={!activeRunId}><Download size={14} /> 导出 Markdown</button></div>
+            <div className="section-heading-actions"><span className="section-note">{annotations.length ? `已复核 ${annotations.length} 条` : '点击标题打开原文'}</span><button className="text-action" onClick={exportAnnotations} disabled={!annotations.length}><FileJson size={14} /> 导出标注</button><button className="text-action" onClick={exportJson} disabled={!activeRunId && !report}><FileJson size={14} /> 导出 JSON</button><button className="text-action" onClick={exportMarkdown} disabled={!activeRunPersisted}><Download size={14} /> 导出 Markdown</button></div>
           </div>
           <div className="evidence-grid">
             {(report?.evidence ?? []).slice(0, 6).map((item) => <EvidenceCard
