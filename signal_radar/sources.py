@@ -246,8 +246,6 @@ class GitHubSourceAdapter:
                 errors.append(error)
                 break
             items.extend(page_items)
-            if cache_hit:
-                break
             if len(page_items) < limit:
                 break
             if since and page_items:
@@ -1389,8 +1387,6 @@ class HackerNewsSourceAdapter:
             if error:
                 break
             hits.extend(page_hits)
-            if cache_hit:
-                break
             if len(page_hits) < bounded_limit or (nb_pages is not None and page + 1 >= nb_pages):
                 break
             if since and page_hits:
@@ -1655,7 +1651,7 @@ class RedditSourceAdapter:
                 cache_hits.append(cache_hit)
                 children.extend(item for item in page_children if isinstance(item, dict))
                 after = str(((payload.get("data") or {}).get("after") or "")).strip() if isinstance(payload, dict) else ""
-                if cache_hit or not after or len(page_children) < bounded_limit:
+                if not after or len(page_children) < bounded_limit:
                     break
             except HTTPError as exc:
                 return SourceFetchResult(status=SourceStatus(

@@ -116,6 +116,32 @@ class CacheTests(unittest.TestCase):
         self.assertIn("page=1", requests[1])
         self.assertEqual(result.status.total_candidates, 1)
 
+    def test_hackernews_cache_hit_on_first_page_does_not_skip_later_pages(self) -> None:
+        first_pages = [
+            {"hits": [{"title": "metadata without id", "created_at": "2026-09-29T00:00:00Z", "story_text": "old"}], "nbPages": 2},
+            {"hits": [{"objectID": "2", "title": "two", "created_at": "2026-09-28T00:00:00Z", "story_text": "two"}], "nbPages": 2},
+        ]
+        second_pages = [
+            first_pages[0],
+            {"hits": [{"objectID": "3", "title": "three", "created_at": "2026-09-29T00:00:00Z", "story_text": "three"}], "nbPages": 2},
+        ]
+        cache = SourceCache(":memory:")
+        self.addCleanup(cache.close)
+
+        def opener_factory(queue):
+            def opener(request, timeout):
+                self.assertGreater(timeout, 0)
+                page = int(request.full_url.split("page=")[-1])
+                return _Response(queue[page])
+            return opener
+
+        first = HackerNewsSourceAdapter(opener=opener_factory(first_pages), cache=cache, max_pages=2).collect("browser-use", limit=1)
+        second = HackerNewsSourceAdapter(opener=opener_factory(second_pages), cache=cache, max_pages=2).collect("browser-use", limit=1)
+        self.assertEqual(first.status.records, 1)
+        self.assertEqual(second.status.records, 1)
+        self.assertEqual(second.status.new_records, 1)
+        self.assertEqual(second.status.duplicate_records, 0)
+
     def test_github_pull_requests_are_opt_in_and_traceable(self) -> None:
         payload = [{
             "id": 42,
