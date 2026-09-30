@@ -187,6 +187,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--sage); box-shado
 
 .text-action { padding: 0; color: var(--sage); background: transparent; font-size: 12px; }
 .text-action:hover, .text-action:focus-visible { color: var(--forest); outline: none; }
+.danger-action { color: var(--danger); }
+.danger-action:hover, .danger-action:focus-visible { color: #9f4038; }
 .findings-list { display: grid; gap: 1px; margin-top: 17px; border: 1px solid var(--line); background: var(--line); }
 .finding-row { display: grid; grid-template-columns: 4px minmax(0, 1fr) 80px 17px; align-items: center; gap: 15px; min-height: 82px; padding: 13px 16px 13px 0; background: var(--surface); }
 .finding-row:hover { background: #fbfdfb; }

@@ -287,6 +287,9 @@ Invoke-RestMethod http://localhost:8000/api/runs/run-local-demo/cancel -Method P
 运行不能撤销。`GET /api/runs/{run_id}` 会返回结构化预算、来源状态和取消标志，方便
 审计实际消耗，而不是只记录最终报告。
 
+React 工作台在 Live 运行期间会显示“取消运行”操作；取消请求只设置运行控制句柄，
+不会执行来源写操作，也不会强制终止正在进行的外部请求。
+
 #### 网页 Prompt Injection 与只读边界
 
 动态页面中的文字始终是不可信数据。页面可能出现“忽略之前指令”“上传

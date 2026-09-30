@@ -27,7 +27,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import type { Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SourceStatus } from './types'
-import { createPlan, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchTrace, followUp, startRun, streamRun } from './lib/api'
+import { cancelRun, createPlan, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchTrace, followUp, startRun, streamRun } from './lib/api'
 
 const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变化、安装兼容性和社区反馈'
 
@@ -105,6 +105,7 @@ function App() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
   const [traceFilter, setTraceFilter] = useState<TraceFilter>('all')
+  const [cancelRequested, setCancelRequested] = useState(false)
 
   useEffect(() => {
     fetchReport().then(setReport).catch(() => setError('API 尚未启动，运行 Replay 后即可加载报告。'))
@@ -159,6 +160,7 @@ function App() {
     const nextPlan = plan ?? await makePlan()
     if (!nextPlan) return
     setRunning(true)
+    setCancelRequested(false)
     setError('')
     setEvents([])
     try {
@@ -173,6 +175,7 @@ function App() {
       setError(cause instanceof Error ? cause.message : '运行失败，请检查 API、来源配置和权限。')
     } finally {
       setRunning(false)
+      setCancelRequested(false)
     }
   }
 
@@ -182,6 +185,7 @@ function App() {
       return
     }
     setRunning(true)
+    setCancelRequested(false)
     setError('')
     setEvents([])
     try {
@@ -197,6 +201,18 @@ function App() {
       setError(cause instanceof Error ? cause.message : '补查失败，请检查运行状态和来源权限。')
     } finally {
       setRunning(false)
+      setCancelRequested(false)
+    }
+  }
+
+  async function requestCancel() {
+    if (!activeRunId || cancelRequested) return
+    try {
+      await cancelRun(activeRunId)
+      setCancelRequested(true)
+      setError('已请求取消当前运行，等待来源适配器完成收尾。')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '取消请求失败')
     }
   }
 
@@ -363,6 +379,7 @@ function App() {
           <div className="section-heading">
             <div><span className="eyebrow eyebrow-accent">RUN MONITOR</span><h2>采集工作台</h2></div>
             <div className="workspace-actions">
+              {running && activeRunId && <button className="text-action danger-action" onClick={requestCancel} disabled={cancelRequested}><XCircle size={14} /> {cancelRequested ? '取消中' : '取消运行'}</button>}
               {activeRunId && <button className="text-action" onClick={() => { reloadTrace(); jumpTo('trace') }}><TerminalSquare size={14} /> 回放 Trace</button>}
               {activeRunId && <span className="run-id">{activeRunId}</span>}
             </div>

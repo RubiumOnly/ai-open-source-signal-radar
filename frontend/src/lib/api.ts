@@ -87,6 +87,12 @@ export function followUp(runId: string, payload: FollowUpRequest): Promise<RunRe
   })
 }
 
+export function cancelRun(runId: string): Promise<{ run_id: string; status: string }> {
+  return request<{ run_id: string; status: string }>(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+  })
+}
+
 export function fetchReport(): Promise<Report> {
   return request<Report>('/api/report')
 }
