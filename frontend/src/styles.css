@@ -67,6 +67,7 @@ h2 { margin-top: 7px; font-size: 18px; font-weight: 650; letter-spacing: -.01em;
 .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
 .section-index, .section-note, .run-id { color: var(--ink-3); font: 10px/1.4 var(--mono); }
 .run-id { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-actions { display: flex; align-items: center; gap: 13px; }
 .brief-grid { display: grid; grid-template-columns: minmax(0, 1.52fr) minmax(260px, .78fr); gap: 14px; margin-top: 18px; }
 .brief-composer, .brief-fields { border: 1px solid var(--line); background: var(--surface); }
 .brief-composer { padding: 19px 20px 14px; }
@@ -138,6 +139,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--sage); box-shado
 .source-count { color: var(--ink-2); font: 12px/1 var(--mono); text-align: right; }
 .empty-panel, .empty-wide { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 200px; padding: 22px; color: var(--ink-3); font-size: 12px; text-align: center; }
 .empty-panel svg, .empty-wide svg { flex: 0 0 auto; color: var(--sage); }
+.followup-bar { display: grid; grid-template-columns: 31px minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 11px; border: 1px solid var(--line); background: var(--surface); }
+.followup-icon { display: grid; width: 29px; height: 29px; place-items: center; color: var(--sage); background: var(--sage-soft); }
+.followup-bar input { height: 34px; border: 0; background: transparent; box-shadow: none; }
+.followup-action { display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 0 11px; border: 0; color: #fff; background: var(--forest); font-size: 11px; }
+.followup-action:hover, .followup-action:focus-visible { background: var(--forest-2); outline: none; }
 
 .text-action { padding: 0; color: var(--sage); background: transparent; font-size: 12px; }
 .text-action:hover, .text-action:focus-visible { color: var(--forest); outline: none; }
@@ -222,4 +228,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--sage); box-shado
   .metric-card-primary strong { font-size: 36px; }
   .finding-row { grid-template-columns: 4px minmax(0, 1fr) 66px 14px; gap: 9px; }
   .finding-main p { white-space: normal; }
+  .workspace-actions { align-items: flex-end; flex-direction: column; gap: 6px; }
+  .followup-bar { grid-template-columns: 31px minmax(0, 1fr); }
+  .followup-action { grid-column: 1 / -1; width: 100%; }
 }

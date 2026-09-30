@@ -1,4 +1,4 @@
-import type { PlanResponse, Report, ResearchPlan, RunEvent, RunResponse, RunMode, ResearchMode } from '../types'
+import type { FollowUpRequest, PlanResponse, Report, ResearchPlan, RunEvent, RunResponse, RunMode, ResearchMode } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -69,6 +69,18 @@ export async function streamRun(runId: string, onEvent: (event: RunEvent) => voi
 
 export function fetchRun(runId: string): Promise<RunResponse> {
   return request<RunResponse>(`/api/runs/${encodeURIComponent(runId)}`)
+}
+
+export function fetchTrace(runId: string): Promise<RunEvent[]> {
+  return request<RunEvent[]>(`/api/runs/${encodeURIComponent(runId)}/trace`)
+}
+
+export function followUp(runId: string, payload: FollowUpRequest): Promise<RunResponse> {
+  return request<RunResponse>(`/api/runs/${encodeURIComponent(runId)}/follow-up`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
 }
 
 export function fetchReport(): Promise<Report> {

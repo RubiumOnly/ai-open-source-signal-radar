@@ -8,11 +8,13 @@ the public Pydantic contracts without duplicating every nested field in SQL.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from .models import Annotation, Report, Run, RunResponse
+from .models import Annotation, Report, Run, RunEvent, RunResponse
 
 
 DEFAULT_HISTORY_PATH = Path(__file__).resolve().parent.parent / "data" / "runs.sqlite3"
@@ -115,23 +117,33 @@ class HistoryStore:
 
     def __init__(self, path: str | Path = DEFAULT_HISTORY_PATH):
         self.path = str(path)
+        self._event_lock = threading.RLock()
         self._memory_connection: sqlite3.Connection | None = None
+        self._db_path = self.path
         if self.path == ":memory:":
+            # 共享缓存 URI 让后台线程各用自己的连接；锚点连接保留数据库生命周期。
+            self._db_path = f"file:signal-radar-{uuid4().hex}?mode=memory&cache=shared"
             self._memory_connection = self._connect()
         else:
             db_path = Path(self.path).expanduser()
             db_path.parent.mkdir(parents=True, exist_ok=True)
             self.path = str(db_path)
+            self._db_path = self.path
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
+        connection = sqlite3.connect(
+            self._db_path,
+            timeout=10,
+            check_same_thread=False,
+            uri=self.path == ":memory:",
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
     def _connection(self) -> sqlite3.Connection:
-        return self._memory_connection or self._connect()
+        return self._connect()
 
     def _initialize(self) -> None:
         connection = self._connection()
@@ -154,6 +166,18 @@ class HistoryStore:
                 """
             )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC)")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS run_events (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL UNIQUE,
+                    run_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    event_json TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq)")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS annotations (
@@ -262,6 +286,38 @@ class HistoryStore:
                 connection.close()
 
     get_run = get
+
+    def add_event(self, event: RunEvent) -> RunEvent:
+        """持久化一条运行事件，保留同一运行内的到达顺序。"""
+
+        with self._event_lock:
+            connection = self._connection()
+            try:
+                connection.execute(
+                    "INSERT INTO run_events(event_id, run_id, created_at, event_json) VALUES (?, ?, ?, ?)",
+                    (event.id, event.run_id, _json_datetime(event.created_at), event.model_dump_json()),
+                )
+                connection.commit()
+            finally:
+                if connection is not self._memory_connection:
+                    connection.close()
+        return event
+
+    def list_events(self, run_id: str, *, offset: int = 0, limit: int = 500) -> list[RunEvent]:
+        """按写入顺序回放事件；SSE 可以从给定偏移继续读取。"""
+
+        bounded_limit = max(1, min(int(limit), 1000))
+        with self._event_lock:
+            connection = self._connection()
+            try:
+                rows = connection.execute(
+                    "SELECT event_json FROM run_events WHERE run_id = ? ORDER BY seq LIMIT ? OFFSET ?",
+                    (run_id, bounded_limit, max(0, int(offset))),
+                ).fetchall()
+                return [RunEvent.model_validate_json(row["event_json"]) for row in rows]
+            finally:
+                if connection is not self._memory_connection:
+                    connection.close()
 
     def add_annotation(self, annotation: Annotation) -> Annotation:
         """Persist one review label without replacing an existing annotation."""

@@ -202,6 +202,8 @@ POST /api/plan                         解析自然语言研究简报，不访�
 POST /api/runs                         后台启动运行，返回 run_id
 GET  /api/runs/{run_id}/stream         SSE 结构化来源事件
 GET  /api/runs/{run_id}/events         获取已保存的运行事件
+GET  /api/runs/{run_id}/trace          回放同一组结构化事件
+POST /api/runs/{run_id}/follow-up      基于已有报告创建有界补查
 GET  /api/runs/{run_id}                查询运行和报告
 ```
 

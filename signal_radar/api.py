@@ -17,6 +17,7 @@ from typing import Any, Callable
 from .models import (
     AccessStatusRecord,
     Annotation,
+    FollowUpRequest,
     HealthResponse,
     ProjectInfo,
     PlanRequest,
@@ -485,8 +486,6 @@ def create_app(
     service.state.latest_run = None
     service.state.history_store = history_store
     service.state.active_controls: dict[str, RunControl] = {}
-    service.state.run_events: dict[str, list[RunEvent]] = {}
-    service.state.run_events_lock = threading.RLock()
     service.state.run_workers: dict[str, threading.Thread] = {}
     # Scheduler creation is deliberately side-effect free. It starts only when
     # the explicit schedule endpoint is called; deployments never schedule a
@@ -515,12 +514,10 @@ def create_app(
     def append_run_event(event: RunEvent) -> None:
         """追加结构化运行事件；事件只包含状态和来源摘要，不包含思维链。"""
 
-        with service.state.run_events_lock:
-            service.state.run_events.setdefault(event.run_id, []).append(event)
+        history_store.add_event(event)
 
     def run_events(run_id: str) -> list[RunEvent]:
-        with service.state.run_events_lock:
-            return list(service.state.run_events.get(run_id, ()))
+        return history_store.list_events(run_id, limit=1000)
 
     @service.get("/api/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -576,6 +573,12 @@ def create_app(
             raise HTTPException(status_code=404, detail="run not found")
         return events
 
+    @service.get("/api/runs/{run_id}/trace", response_model=list[RunEvent], dependencies=[Depends(require_api_token)])
+    def run_trace(run_id: str) -> list[RunEvent]:
+        """运行事件的回放别名，供 Trace 页面使用。"""
+
+        return run_event_list(run_id)
+
     @service.get("/api/runs/{run_id}/stream", dependencies=[Depends(require_api_token)])
     def run_event_stream(run_id: str) -> Any:
         """以 SSE 重放或等待结构化运行事件，兼容前端工作台。"""
@@ -589,14 +592,15 @@ def create_app(
             idle_deadline = time.monotonic() + 900.0
             terminal = {"completed", "partial", "cancelled", "failed"}
             while time.monotonic() < idle_deadline:
-                events = run_events(run_id)
-                for event in events[cursor:]:
+                events = history_store.list_events(run_id, offset=cursor, limit=100)
+                for event in events:
                     payload = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
                     yield f"event: {event.type}\ndata: {payload}\n\n"
                     cursor += 1
                     if event.type in terminal:
                         return
-                if cursor and events and events[-1].type in terminal:
+                current = history_store.get(run_id)
+                if current and current.run.status in terminal and not events:
                     return
                 time.sleep(0.15)
 
@@ -906,6 +910,32 @@ def create_app(
         service.state.run_workers[run_id] = thread
         thread.start()
         return RunResponse(run=queued, report=None)
+
+    @service.post("/api/runs/{run_id}/follow-up", response_model=RunResponse, status_code=202, dependencies=[Depends(require_api_token)])
+    def follow_up(run_id: str, payload: FollowUpRequest) -> RunResponse:
+        """基于已有报告创建新的、有界补查运行。"""
+
+        original = history_store.get(run_id)
+        if original is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        if original.report is None:
+            raise HTTPException(status_code=422, detail="run has no report to follow up")
+        plan = build_plan(PlanRequest(
+            query=payload.query,
+            project=original.report.project.repository,
+            window_days=payload.window_days or original.report.window_days,
+            sources=payload.sources,
+        ))
+        follow_request = RunRequest(
+            mode=payload.mode or original.run.mode,
+            query=payload.query,
+            project=plan.project,
+            window_days=plan.window_days,
+            research_mode=plan.research_mode,
+            focus=plan.focus,
+            sources=plan.sources,
+        )
+        return run_async(follow_request)
 
     @service.post("/api/run", response_model=RunResponse, dependencies=[Depends(require_api_token)])
     def run(payload: RunRequest | None = Body(default=None)) -> RunResponse:

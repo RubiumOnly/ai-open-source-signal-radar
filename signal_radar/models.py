@@ -349,6 +349,15 @@ class PlanResponse(ContractModel):
     plan: ResearchPlan
 
 
+class FollowUpRequest(ContractModel):
+    """对已有运行发起的限定范围补查请求。"""
+
+    query: str = Field(min_length=1, max_length=4000)
+    sources: list[str] = Field(default_factory=list, max_length=8)
+    window_days: int | None = Field(default=None, ge=1, le=3650)
+    mode: Literal["replay", "live"] | None = None
+
+
 class RunEvent(ContractModel):
     """运行流中的结构化状态事件，不承载内部思维链。"""
 

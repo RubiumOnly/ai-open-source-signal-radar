@@ -13,6 +13,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LoaderCircle,
+  MessageCircle,
   Play,
   Radar,
   RefreshCw,
@@ -20,11 +21,12 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Send,
   TerminalSquare,
   XCircle,
 } from 'lucide-react'
 import type { Event, Report, ResearchMode, ResearchPlan, RunEvent, RunMode, SourceStatus } from './types'
-import { createPlan, fetchReport, fetchRun, startRun, streamRun } from './lib/api'
+import { createPlan, fetchReport, fetchRun, fetchTrace, followUp, startRun, streamRun } from './lib/api'
 
 const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变化、安装兼容性和社区反馈'
 
@@ -96,6 +98,7 @@ function App() {
   const [error, setError] = useState('')
   const [token, setToken] = useState(() => window.localStorage.getItem('signal-radar-api-token') ?? '')
   const [showSettings, setShowSettings] = useState(false)
+  const [followUpQuery, setFollowUpQuery] = useState('')
 
   useEffect(() => {
     fetchReport().then(setReport).catch(() => setError('API 尚未启动，运行 Replay 后即可加载报告。'))
@@ -140,6 +143,37 @@ function App() {
       setError(cause instanceof Error ? cause.message : '运行失败，请检查 API、来源配置和权限。')
     } finally {
       setRunning(false)
+    }
+  }
+
+  async function runFollowUp() {
+    if (!activeRunId || !followUpQuery.trim()) {
+      setError(activeRunId ? '写下需要核验或补查的问题。' : '请先完成一次运行，再发起补查。')
+      return
+    }
+    setRunning(true)
+    setError('')
+    setEvents([])
+    try {
+      const started = await followUp(activeRunId, { query: followUpQuery.trim(), mode: runMode })
+      setActiveRunId(started.run.run_id)
+      await streamRun(started.run.run_id, (event) => setEvents((current) => [...current, event]))
+      const finished = await fetchRun(started.run.run_id)
+      setReport(finished.report ?? null)
+      setFollowUpQuery('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '补查失败，请检查运行状态和来源权限。')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  async function reloadTrace() {
+    if (!activeRunId) return
+    try {
+      setEvents(await fetchTrace(activeRunId))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Trace 回放加载失败')
     }
   }
 
@@ -277,7 +311,10 @@ function App() {
         <section className="workspace-section" id="workspace">
           <div className="section-heading">
             <div><span className="eyebrow eyebrow-accent">RUN MONITOR</span><h2>采集工作台</h2></div>
-            {activeRunId && <span className="run-id">{activeRunId}</span>}
+            <div className="workspace-actions">
+              {activeRunId && <button className="text-action" onClick={reloadTrace}><TerminalSquare size={14} /> 回放 Trace</button>}
+              {activeRunId && <span className="run-id">{activeRunId}</span>}
+            </div>
           </div>
           <div className="workspace-grid">
             <div className="activity-panel">
@@ -292,6 +329,11 @@ function App() {
                 <div className="empty-panel"><ShieldCheck size={23} /><span>Replay 报告或 Live 运行完成后，来源状态会出现在这里。</span></div>
               )}
             </div>
+          </div>
+          <div className="followup-bar">
+            <div className="followup-icon"><MessageCircle size={17} /></div>
+            <input value={followUpQuery} onChange={(event) => setFollowUpQuery(event.target.value)} placeholder="对当前运行提出一个限定范围的核验或补查问题" disabled={running} />
+            <button className="followup-action" onClick={runFollowUp} disabled={running || !activeRunId}><Send size={15} /> 补查</button>
           </div>
         </section>
 

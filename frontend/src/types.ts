@@ -107,3 +107,10 @@ export interface RunResponse {
   run: Run
   report?: Report | null
 }
+
+export interface FollowUpRequest {
+  query: string
+  sources?: string[]
+  window_days?: number
+  mode?: RunMode
+}

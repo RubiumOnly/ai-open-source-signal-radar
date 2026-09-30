@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 try:
@@ -13,7 +14,7 @@ except ImportError:  # pragma: no cover - API extra is optional
     TestClient = None  # type: ignore[assignment]
 
 from signal_radar.history import HistoryStore, report_to_markdown
-from signal_radar.models import Annotation, Report, Run
+from signal_radar.models import Annotation, Report, Run, RunEvent
 from signal_radar.repository import load_fixture_report
 
 
@@ -65,6 +66,26 @@ class HistoryStoreTests(unittest.TestCase):
         self.assertEqual(response.run.run_id, run.run_id)
         self.assertEqual(response.report.project.repository, report.project.repository)
         self.assertEqual(store.list()[0].run_id, run.run_id)
+
+    def test_run_events_round_trip_and_offset(self) -> None:
+        store = HistoryStore(":memory:")
+        self.addCleanup(store.close)
+        first = RunEvent(id="event-1", run_id="run-events", type="started", stage="collect")
+        second = RunEvent(id="event-2", run_id="run-events", type="completed", stage="done", records=3)
+        store.add_event(first)
+        store.add_event(second)
+        self.assertEqual([event.id for event in store.list_events("run-events")], ["event-1", "event-2"])
+        self.assertEqual(store.list_events("run-events", offset=1)[0].records, 3)
+
+    def test_run_events_survive_store_reopen(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.sqlite3"
+            first = HistoryStore(path)
+            first.add_event(RunEvent(id="event-reopen", run_id="run-reopen", type="completed"))
+            reopened = HistoryStore(path)
+            self.assertEqual(reopened.list_events("run-reopen")[0].id, "event-reopen")
+            first.close()
+            reopened.close()
 
     def test_file_store_survives_new_store_instance_and_orders_newest_first(self) -> None:
         report = load_fixture_report()
@@ -177,6 +198,31 @@ class HistoryEndpointTests(unittest.TestCase):
         alias = client.get(f"/api/runs/{run_id}/report.md")
         self.assertEqual(alias.status_code, 200)
         self.assertEqual(alias.text, markdown.text)
+
+    def test_trace_events_and_follow_up_endpoint(self) -> None:
+        from signal_radar.api import create_app
+
+        store = HistoryStore(":memory:")
+        self.addCleanup(store.close)
+        client = TestClient(create_app(history_store=store))
+        original = client.post("/api/run", json={"mode": "replay"}).json()["run"]
+        events = client.get(f"/api/runs/{original['run_id']}/trace")
+        self.assertEqual(events.status_code, 200)
+        self.assertIn("completed", [item["type"] for item in events.json()])
+        follow = client.post(
+            f"/api/runs/{original['run_id']}/follow-up",
+            json={"query": "只核验最近版本变化"},
+        )
+        self.assertEqual(follow.status_code, 202)
+        follow_id = follow.json()["run"]["run_id"]
+        self.assertTrue(follow_id)
+        for _ in range(100):
+            state = client.get(f"/api/runs/{follow_id}").json()["run"]["status"]
+            trace = client.get(f"/api/runs/{follow_id}/trace").json()
+            if state not in {"queued", "running"} and trace and trace[-1]["type"] in {"completed", "partial", "cancelled", "failed"}:
+                break
+            time.sleep(0.01)
+        self.assertNotIn(state, {"queued", "running"})
 
     def test_unknown_run_returns_not_found(self) -> None:
         from signal_radar.api import create_app
