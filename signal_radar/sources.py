@@ -172,31 +172,38 @@ class GitHubSourceAdapter:
         cache_key: str | None = None,
     ) -> tuple[list[dict[str, Any]], int | None, str | None, float, bool]:
         conditional_headers = self.cache.request_headers(cache_key or url) if self.cache else {}
+        base_headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "signal-radar/0.1",
+            **({"Authorization": f"Bearer {self.token}"} if self.token else {}),
+        }
         request = Request(
             url,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "signal-radar/0.1",
-                **conditional_headers,
-                **({"Authorization": f"Bearer {self.token}"} if self.token else {}),
-            },
+            headers={**base_headers, **conditional_headers},
         )
         started = time.perf_counter()
         try:
             with self._opener(request, timeout=self.timeout) as response:
                 status_code = getattr(response, "status", None) or response.getcode()
                 if status_code == 304:
-                    return [], status_code, None, _latency(started), True
-                raw = response.read()
+                    # The cache intentionally stores metadata only. Re-fetch the
+                    # body without validators so a cache hit still produces a
+                    # complete report instead of an empty snapshot.
+                    with self._opener(Request(url, headers=base_headers), timeout=self.timeout) as fresh:
+                        status_code = getattr(fresh, "status", None) or fresh.getcode()
+                        raw = fresh.read()
+                        response_headers = getattr(fresh, "headers", None)
+                else:
+                    raw = response.read()
+                    response_headers = getattr(response, "headers", None)
                 if not isinstance(raw, (bytes, bytearray)):
                     raw = str(raw).encode("utf-8", errors="replace")
                 if self.cache:
-                    headers = getattr(response, "headers", None)
                     cache_hit = not self.cache.save_response(
                         cache_key or url,
                         bytes(raw),
-                        etag=headers.get("ETag") if headers is not None else None,
-                        last_modified=headers.get("Last-Modified") if headers is not None else None,
+                        etag=response_headers.get("ETag") if response_headers is not None else None,
+                        last_modified=response_headers.get("Last-Modified") if response_headers is not None else None,
                     )
                 else:
                     cache_hit = False
@@ -314,7 +321,6 @@ class GitHubSourceAdapter:
                 total_candidates += 1
                 if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
                     duplicate_records += 1
-                    continue
                 articles.append(article)
                 evidence.append(ev)
                 claims.append(claim)
@@ -328,7 +334,6 @@ class GitHubSourceAdapter:
                 total_candidates += 1
                 if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
                     duplicate_records += 1
-                    continue
                 articles.append(article)
                 evidence.append(ev)
                 claims.append(claim)
@@ -350,7 +355,7 @@ class GitHubSourceAdapter:
                 authenticated=bool(self.token),
                 pages=release_pages + issue_pages,
                 cache_hit=release_cache_hit and issue_cache_hit if self.cache else False,
-                new_records=len(articles),
+                new_records=max(0, total_candidates - duplicate_records),
                 duplicate_records=duplicate_records,
                 total_candidates=total_candidates,
             ),
@@ -416,7 +421,6 @@ class GitHubSourceAdapter:
             candidates += 1
             if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
                 duplicates += 1
-                continue
             article.metadata.update({
                 "collector": "github_api",
                 "state": item.get("state"),
@@ -449,7 +453,7 @@ class GitHubSourceAdapter:
                 authenticated=bool(self.token),
                 pages=pages,
                 cache_hit=cache_hit if self.cache else False,
-                new_records=len(articles),
+                new_records=max(0, candidates - duplicates),
                 duplicate_records=duplicates,
                 total_candidates=candidates,
             ),
@@ -513,7 +517,6 @@ class GitHubSourceAdapter:
             candidates += 1
             if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
                 duplicates += 1
-                continue
             article.metadata.update({
                 "collector": "github_api",
                 "category": ((item.get("category") or {}).get("name") if isinstance(item.get("category"), dict) else None),
@@ -549,7 +552,7 @@ class GitHubSourceAdapter:
                 authenticated=bool(self.token),
                 pages=pages,
                 cache_hit=cache_hit if self.cache else False,
-                new_records=len(articles),
+                new_records=max(0, candidates - duplicates),
                 duplicate_records=duplicates,
                 total_candidates=candidates,
             ),
@@ -613,7 +616,6 @@ class GitHubSourceAdapter:
             candidates += 1
             if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
                 duplicates += 1
-                continue
             article.author = str((item.get("user") or {}).get("login") or "").strip() or None
             article.metadata.update({
                 "collector": "github_api",
@@ -652,7 +654,7 @@ class GitHubSourceAdapter:
                 authenticated=bool(self.token),
                 pages=pages,
                 cache_hit=cache_hit if self.cache else False,
-                new_records=len(articles),
+                new_records=max(0, candidates - duplicates),
                 duplicate_records=duplicates,
                 total_candidates=candidates,
             ),
@@ -980,11 +982,14 @@ class RSSSourceAdapter:
     def _fetch(self, feed_url: str) -> _FeedFetch:
         if not self._valid_url(feed_url):
             return _FeedFetch(error="invalid_url")
+        base_headers = {
+            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
+            "User-Agent": "signal-radar/0.1 (+https://github.com/RubiumOnly/ai-open-source-signal-radar)",
+        }
         request = Request(
             feed_url,
             headers={
-                "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
-                "User-Agent": "signal-radar/0.1 (+https://github.com/RubiumOnly/ai-open-source-signal-radar)",
+                **base_headers,
                 **(self.cache.request_headers(f"rss:{feed_url}") if self.cache else {}),
             },
         )
@@ -993,12 +998,20 @@ class RSSSourceAdapter:
                 getcode = getattr(response, "getcode", None)
                 status_code = getattr(response, "status", None) or (getcode() if callable(getcode) else None)
                 if status_code == 304:
-                    return _FeedFetch(status_code=status_code, cache_hit=True)
-                try:
-                    raw = response.read(self.max_bytes + 1)
-                except TypeError:
-                    # 简单的离线 mock 常见地只实现 ``read()``。
-                    raw = response.read()
+                    with self._opener(Request(feed_url, headers=base_headers), timeout=self.timeout) as fresh:
+                        status_code = getattr(fresh, "status", None) or fresh.getcode()
+                        response_headers = getattr(fresh, "headers", None)
+                        try:
+                            raw = fresh.read(self.max_bytes + 1)
+                        except TypeError:
+                            raw = fresh.read()
+                else:
+                    response_headers = getattr(response, "headers", None)
+                    try:
+                        raw = response.read(self.max_bytes + 1)
+                    except TypeError:
+                        # 简单的离线 mock 常见地只实现 ``read()``。
+                        raw = response.read()
             status_name = _feed_http_status(status_code)
             if status_name:
                 return _FeedFetch(status_code=status_code, error=f"http_{status_code}")
@@ -1008,12 +1021,11 @@ class RSSSourceAdapter:
                 return _FeedFetch(status_code=status_code, error="response_too_large")
             cache_hit = False
             if self.cache:
-                headers = getattr(response, "headers", None)
                 cache_hit = not self.cache.save_response(
                     f"rss:{feed_url}",
                     bytes(raw),
-                    etag=headers.get("ETag") if headers is not None else None,
-                    last_modified=headers.get("Last-Modified") if headers is not None else None,
+                    etag=response_headers.get("ETag") if response_headers is not None else None,
+                    last_modified=response_headers.get("Last-Modified") if response_headers is not None else None,
                 )
             parsed = _parse_feed_document(bytes(raw), feed_url)
             parsed.status_code = status_code
@@ -1120,7 +1132,6 @@ class RSSSourceAdapter:
                 f"rss:{feed_url}", article.id, article.content_hash or ""
             ):
                 duplicate_records += 1
-                continue
             stance, sentiment, category = _classify_feedback(f"{entry.title}\n{body}")
             # 官方公告通常是中性信息，只有标题或正文明确提到故障/修复时才提高风险。
             risk_score = 64.0 if sentiment == "negative" else 18.0 if sentiment == "positive" else 12.0
@@ -1205,7 +1216,7 @@ class RSSSourceAdapter:
                 authenticated=False,
                 pages=len(fetched),
                 cache_hit=bool(successful_fetches) and all(result.cache_hit for result in successful_fetches),
-                new_records=len(articles),
+                new_records=max(0, total_candidates - duplicate_records),
                 duplicate_records=duplicate_records,
                 total_candidates=total_candidates,
             ),
@@ -1276,11 +1287,14 @@ class HackerNewsSourceAdapter:
         }
         if since:
             params["numericFilters"] = f"created_at_i>={int(since.timestamp())}"
+        base_headers = {
+            "Accept": "application/json",
+            "User-Agent": "signal-radar/0.1 (+https://github.com/RubiumOnly/ai-open-source-signal-radar)",
+        }
         request = Request(
             f"{self.base_url}?{urlencode(params)}",
             headers={
-                "Accept": "application/json",
-                "User-Agent": "signal-radar/0.1 (+https://github.com/RubiumOnly/ai-open-source-signal-radar)",
+                **base_headers,
                 **(self.cache.request_headers(f"hackernews:{query}:{_cache_time_key(since)}:page:{page}") if self.cache else {}),
             },
         )
@@ -1289,11 +1303,19 @@ class HackerNewsSourceAdapter:
             with self._opener(request, timeout=self.timeout) as response:
                 status_code = getattr(response, "status", None) or response.getcode()
                 if status_code == 304:
-                    return [], status_code, None, _latency(started), True, None
-                try:
-                    raw = response.read(self.max_bytes + 1)
-                except TypeError:
-                    raw = response.read()
+                    with self._opener(Request(f"{self.base_url}?{urlencode(params)}", headers=base_headers), timeout=self.timeout) as fresh:
+                        status_code = getattr(fresh, "status", None) or fresh.getcode()
+                        response_headers = getattr(fresh, "headers", None)
+                        try:
+                            raw = fresh.read(self.max_bytes + 1)
+                        except TypeError:
+                            raw = fresh.read()
+                else:
+                    response_headers = getattr(response, "headers", None)
+                    try:
+                        raw = response.read(self.max_bytes + 1)
+                    except TypeError:
+                        raw = response.read()
             if status_code is not None and status_code >= 400:
                 return [], status_code, f"http_{status_code}", _latency(started), False, None
             if not isinstance(raw, (bytes, bytearray)):
@@ -1306,12 +1328,11 @@ class HackerNewsSourceAdapter:
                 return [], status_code, "invalid_payload", _latency(started), False, None
             cache_hit = False
             if self.cache:
-                headers = getattr(response, "headers", None)
                 cache_hit = not self.cache.save_response(
                     f"hackernews:{query}:{_cache_time_key(since)}:page:{page}",
                     bytes(raw),
-                    etag=headers.get("ETag") if headers is not None else None,
-                    last_modified=headers.get("Last-Modified") if headers is not None else None,
+                    etag=response_headers.get("ETag") if response_headers is not None else None,
+                    last_modified=response_headers.get("Last-Modified") if response_headers is not None else None,
                 )
             nb_pages = payload.get("nbPages") if isinstance(payload, dict) else None
             try:
@@ -1440,7 +1461,6 @@ class HackerNewsSourceAdapter:
             total_candidates += 1
             if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
                 duplicate_records += 1
-                continue
             stance, sentiment, category = _classify_feedback(text)
             risk_score = 64.0 if sentiment == "negative" else 18.0 if sentiment == "positive" else 28.0
             evidence_id = f"ev-{article_id.removeprefix('hackernews-')}"
@@ -1505,7 +1525,7 @@ class HackerNewsSourceAdapter:
                 latency_ms=latency,
                 pages=pages,
                 cache_hit=bool(cache_hits) and all(cache_hits) if self.cache else False,
-                new_records=len(articles),
+                new_records=max(0, total_candidates - duplicate_records),
                 duplicate_records=duplicate_records,
                 total_candidates=total_candidates,
             ),
@@ -1580,11 +1600,14 @@ class RedditSourceAdapter:
             if after:
                 query_params["after"] = after
             request_url = f"{self.base_url}?{urlencode(query_params)}"
+            base_headers = {
+                "Accept": "application/json",
+                "User-Agent": "signal-radar/0.2 (public community research)",
+            }
             request = Request(
                 request_url,
                 headers={
-                    "Accept": "application/json",
-                    "User-Agent": "signal-radar/0.2 (public community research)",
+                    **base_headers,
                     **(self.cache.request_headers(f"reddit:{query}:{_cache_time_key(since)}:page:{page}") if self.cache else {}),
                 },
             )
@@ -1592,14 +1615,19 @@ class RedditSourceAdapter:
                 with self._opener(request, timeout=self.timeout) as response:
                     status_code = getattr(response, "status", None) or response.getcode()
                     if status_code == 304:
-                        cache_hits.append(True)
-                        pages += 1
-                        break
-                    try:
-                        raw = response.read(self.max_bytes + 1)
-                    except TypeError:
-                        raw = response.read()
-                    response_headers = getattr(response, "headers", None)
+                        with self._opener(Request(request_url, headers=base_headers), timeout=self.timeout) as fresh:
+                            status_code = getattr(fresh, "status", None) or fresh.getcode()
+                            response_headers = getattr(fresh, "headers", None)
+                            try:
+                                raw = fresh.read(self.max_bytes + 1)
+                            except TypeError:
+                                raw = fresh.read()
+                    else:
+                        try:
+                            raw = response.read(self.max_bytes + 1)
+                        except TypeError:
+                            raw = response.read()
+                        response_headers = getattr(response, "headers", None)
                 if status_code is not None and status_code >= 400:
                     status = "rate_limited" if status_code == 429 else "blocked" if status_code == 403 else "error"
                     access = "rate_limited" if status_code == 429 else "blocked" if status_code == 403 else "error"
@@ -1688,7 +1716,6 @@ class RedditSourceAdapter:
             total_candidates += 1
             if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
                 duplicate_records += 1
-                continue
             stance, sentiment, category = _classify_feedback(text_value)
             risk_score = 64.0 if sentiment == "negative" else 18.0 if sentiment == "positive" else 28.0
             evidence_id = f"ev-{article_id.removeprefix('reddit-')}"
@@ -1720,7 +1747,7 @@ class RedditSourceAdapter:
                 source="Reddit", source_type="community", status="ok", access_status="public",
                 records=len(articles), detail=f"{len(articles)} records for query={query!r}", latency_ms=_latency(started),
                 pages=pages, cache_hit=bool(cache_hits) and all(cache_hits) if self.cache else False,
-                new_records=len(articles), duplicate_records=duplicate_records, total_candidates=total_candidates,
+                new_records=max(0, total_candidates - duplicate_records), duplicate_records=duplicate_records, total_candidates=total_candidates,
             ), articles=articles, claims=claims, events=events, evidence=evidence,
         )
 

@@ -223,8 +223,8 @@ GET  /api/metrics                      查看当前与历史来源质量指标
 
 Live 运行默认启用本地来源元数据缓存（`data/source-cache.sqlite3`）。缓存只保存
 HTTP 的 `ETag`、`Last-Modified`、响应摘要和记录指纹，不保存正文、Cookie、浏览器
-Profile 或模型密钥。重复运行会优先发送条件请求；相同记录不会再次进入分析，内容
-发生变化的记录会作为更新重新分析。每个来源状态会记录 `pages`、`latency_ms`、
+Profile 或模型密钥。重复运行会优先发送条件请求；相同记录不会计入新增记录，内容
+发生变化的记录会作为更新重新分析，同时报告仍保留当前窗口的完整快照。每个来源状态会记录 `pages`、`latency_ms`、
 `new_records`、`duplicate_records`、`total_candidates` 和 `cache_hit`，工作台的来源
 面板与运行事件会显示这些指标。
 
