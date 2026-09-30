@@ -62,6 +62,7 @@ const sourceTypeLabels: Record<string, string> = {
 const statusLabels: Record<string, string> = {
   public: '公开可访问',
   ok: '已完成',
+  queued: '排队中',
   partial: '部分完成',
   auth_required: '需要授权',
   blocked: '访问受阻',
@@ -76,6 +77,19 @@ const statusLabels: Record<string, string> = {
 const focusFallback = ['版本变化', '社区反馈', '维护活跃度']
 type TraceFilter = 'all' | 'collect' | 'done'
 type SectionId = 'overview' | 'workspace' | 'trace' | 'history' | 'findings' | 'insights' | 'evidence'
+type HistoryFilter = 'all' | 'completed' | 'partial' | 'attention'
+
+const eventTypeLabels: Record<string, string> = {
+  queued: '已排队',
+  started: '开始运行',
+  plan: '研究计划',
+  source_started: '来源开始',
+  source_completed: '来源完成',
+  completed: '运行完成',
+  partial: '部分完成',
+  cancelled: '已取消',
+  failed: '运行失败',
+}
 
 const sentimentLabels: Record<string, string> = {
   positive: '正面',
@@ -109,6 +123,10 @@ function sourceTypeName(sourceType: string) {
 
 function sentimentName(sentiment: string) {
   return sentimentLabels[sentiment] ?? sentiment
+}
+
+function eventTypeName(type: string) {
+  return eventTypeLabels[type] ?? type
 }
 
 function riskTone(level?: string) {
@@ -151,6 +169,8 @@ function App() {
   const [activeSection, setActiveSection] = useState<SectionId>('overview')
   const [reportLoading, setReportLoading] = useState(true)
   const [selectingRunId, setSelectingRunId] = useState<string | null>(null)
+  const [historyQuery, setHistoryQuery] = useState('')
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all')
 
   useEffect(() => {
     let mounted = true
@@ -201,6 +221,17 @@ function App() {
   )
   const topics = report?.topics ?? []
   const trends = report?.trends ?? []
+  const visibleHistory = useMemo(() => {
+    const normalizedQuery = historyQuery.trim().toLowerCase()
+    return runHistory.filter((run) => {
+      const matchesQuery = !normalizedQuery || [run.subject, run.run_id, run.mode].some((value) => value.toLowerCase().includes(normalizedQuery))
+      if (!matchesQuery) return false
+      if (historyFilter === 'completed') return run.status === 'completed'
+      if (historyFilter === 'partial') return run.status === 'partial'
+      if (historyFilter === 'attention') return ['queued', 'running', 'failed', 'cancelled'].includes(run.status)
+      return true
+    })
+  }, [historyFilter, historyQuery, runHistory])
 
   async function refreshHistory() {
     setHistoryLoading(true)
@@ -538,13 +569,13 @@ function App() {
           </div>
           <div className="workspace-grid">
             <div className="activity-panel">
-              <div className="panel-heading"><span>结构化运行事件</span><span className="panel-count">{events.length} events</span></div>
+              <div className="panel-heading"><span>结构化运行事件</span><span className="panel-count">{events.length} 条事件</span></div>
               {latestEvents.length ? latestEvents.map((event) => <RunEventRow event={event} key={event.id} />) : (
                 <div className={`empty-panel ${running ? 'empty-panel-running' : ''}`}><Radar size={23} /> <span>{running ? '正在等待来源返回，事件会实时出现在这里。' : '开始一次研究后，这里会显示来源状态、记录数量和预算事件。'}</span></div>
               )}
             </div>
             <div className="sources-panel">
-              <div className="panel-heading"><span>来源状态</span><span className="panel-count">{sources.length} sources</span></div>
+              <div className="panel-heading"><span>来源状态</span><span className="panel-count">{sources.length} 个来源</span></div>
               {sources.length ? sources.map((source) => <SourceRow source={source} key={source.source} />) : (
                 <div className="empty-panel"><ShieldCheck size={23} /><span>Replay 报告或 Live 运行完成后，来源状态会出现在这里。</span></div>
               )}
@@ -569,7 +600,7 @@ function App() {
               <button className={traceFilter === 'collect' ? 'trace-filter-active' : ''} onClick={() => setTraceFilter('collect')}>采集</button>
               <button className={traceFilter === 'done' ? 'trace-filter-active' : ''} onClick={() => setTraceFilter('done')}>完成</button>
             </div>
-            <span className="panel-count">{traceEvents.length} / {events.length} events</span>
+            <span className="panel-count">{traceEvents.length} / {events.length} 条事件</span>
           </div>
           <div className="trace-panel">
             {traceEvents.length ? traceEvents.map((event, index) => <TraceRow event={event} index={index} key={event.id} />) : (
@@ -583,9 +614,16 @@ function App() {
             <div><span className="eyebrow">历史</span><h2>运行历史</h2></div>
             <button className="text-action" onClick={refreshHistory} disabled={historyLoading}><RefreshCw size={14} /> 刷新</button>
           </div>
+          <div className="history-toolbar">
+            <div className="history-search"><Search size={14} /><input aria-label="搜索运行历史" value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="搜索项目或运行 ID" /></div>
+            <div className="history-filter" role="group" aria-label="运行历史筛选">
+              {([['all', '全部'], ['completed', '已完成'], ['partial', '部分完成'], ['attention', '需关注']] as const).map(([value, label]) => <button key={value} className={historyFilter === value ? 'history-filter-active' : ''} onClick={() => setHistoryFilter(value)} aria-pressed={historyFilter === value}>{label}</button>)}
+            </div>
+            <span className="panel-count">{visibleHistory.length} / {runHistory.length} 条</span>
+          </div>
           <div className="history-list">
-            {runHistory.length ? runHistory.map((run) => <HistoryRow key={run.run_id} run={run} active={run.run_id === activeRunId} loading={run.run_id === selectingRunId} onSelect={selectHistoryRun} />) : (
-              <div className="empty-wide"><Clock3 size={21} /><span>{historyLoading ? '正在读取历史运行…' : '完成一次运行后，这里会保留可回放记录。'}</span></div>
+            {visibleHistory.length ? visibleHistory.map((run) => <HistoryRow key={run.run_id} run={run} active={run.run_id === activeRunId} loading={run.run_id === selectingRunId} onSelect={selectHistoryRun} />) : (
+              <div className="empty-wide"><Clock3 size={21} /><span>{historyLoading ? '正在读取历史运行…' : runHistory.length ? '没有匹配的运行记录。' : '完成一次运行后，这里会保留可回放记录。'}</span>{runHistory.length > 0 && <button className="text-action" onClick={() => { setHistoryQuery(''); setHistoryFilter('all') }}>清除筛选</button>}</div>
             )}
           </div>
         </section>
@@ -609,11 +647,11 @@ function App() {
           </div>
           <div className="insights-grid">
             <div className="insight-panel">
-              <div className="panel-heading"><span>主题分布</span><span className="panel-count">{topics.length} topics</span></div>
+              <div className="panel-heading"><span>主题分布</span><span className="panel-count">{topics.length} 个主题</span></div>
               {topics.length ? topics.slice(0, 6).map((topic) => <TopicRow key={topic.name} topic={topic} maxCount={Math.max(...topics.map((item) => item.count), 1)} />) : <div className="empty-panel"><BarChart3 size={22} /><span>完成一次运行后，这里会显示主题集中度。</span></div>}
             </div>
             <div className="insight-panel">
-              <div className="panel-heading"><span>时间趋势</span><span className="panel-count">{trends.length} points</span></div>
+              <div className="panel-heading"><span>时间趋势</span><span className="panel-count">{trends.length} 个日期</span></div>
               {trends.length ? trends.slice(-7).map((trend) => <TrendRow key={trend.date} trend={trend} maxMentions={Math.max(...trends.map((item) => item.mentions), 1)} />) : <div className="empty-panel"><BarChart3 size={22} /><span>时间窗口内还没有足够记录形成趋势。</span></div>}
             </div>
           </div>
@@ -682,7 +720,7 @@ function TraceRow({ event, index }: { event: RunEvent; index: number }) {
     event.pages && event.pages > 1 ? `${event.pages} 页` : '',
     event.cache_hit ? '缓存命中' : '',
   ].filter(Boolean).join(' · ')
-  return <div className={`trace-row ${terminal ? 'trace-row-terminal' : ''}`}><span className="trace-index">{String(index + 1).padStart(2, '0')}</span><span className={`trace-node ${terminal ? 'trace-node-terminal' : ''}`} /> <div className="trace-main"><strong>{event.message || event.type}</strong><span>{metrics}</span></div><span className="trace-type">{event.type}</span><time>{formatTime(event.created_at)}</time></div>
+  return <div className={`trace-row ${terminal ? 'trace-row-terminal' : ''}`}><span className="trace-index">{String(index + 1).padStart(2, '0')}</span><span className={`trace-node ${terminal ? 'trace-node-terminal' : ''}`} /> <div className="trace-main"><strong>{event.message || eventTypeName(event.type)}</strong><span>{metrics}</span></div><span className="trace-type">{eventTypeName(event.type)}</span><time>{formatTime(event.created_at)}</time></div>
 }
 
 function AccessBoundary({ report }: { report: Report }) {
@@ -709,12 +747,12 @@ function AccessBoundary({ report }: { report: Report }) {
 
 function TopicRow({ topic, maxCount }: { topic: Report['topics'][number]; maxCount: number }) {
   const width = `${Math.max(5, Math.round(topic.count / maxCount * 100))}%`
-  return <div className="insight-row"><div className="insight-row-heading"><strong>{topic.name}</strong><span>{topic.count} 条 · {topic.sentiment}</span></div><div className="insight-track"><span style={{ width }} /></div><small>风险 {Math.round(topic.risk_score)} / 100</small></div>
+  return <div className="insight-row"><div className="insight-row-heading"><strong>{topic.name}</strong><span>{topic.count} 条 · {sentimentName(topic.sentiment)}</span></div><div className="insight-track"><span style={{ width }} /></div><small>风险 {Math.round(topic.risk_score)} / 100</small></div>
 }
 
 function TrendRow({ trend, maxMentions }: { trend: Report['trends'][number]; maxMentions: number }) {
   const width = `${Math.max(5, Math.round(trend.mentions / maxMentions * 100))}%`
-  return <div className="insight-row"><div className="insight-row-heading"><strong>{formatDate(trend.date)}</strong><span>{trend.mentions} mentions</span></div><div className="insight-track trend-track"><span style={{ width }} /></div><small>风险 {Math.round(trend.risk_score)} / 100 · 正面 {trend.positive} · 负面 {trend.negative}</small></div>
+  return <div className="insight-row"><div className="insight-row-heading"><strong>{formatDate(trend.date)}</strong><span>{trend.mentions} 次提及</span></div><div className="insight-track trend-track"><span style={{ width }} /></div><small>风险 {Math.round(trend.risk_score)} / 100 · 正面 {trend.positive} · 负面 {trend.negative}</small></div>
 }
 
 function SourceRow({ source }: { source: SourceStatus }) {
