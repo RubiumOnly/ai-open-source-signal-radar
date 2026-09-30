@@ -410,6 +410,19 @@ python -m signal_radar.evaluate `
 `fixtures/prompt_injection_browser_use.json` 演示了页面含有指令样文本时的安全
 结果：页面标题可以保留为待分析元数据，但正文证据为空，且未授权动作目标为零。
 
+### 离线基准
+
+需要比较多份 fixture 的通过率和评测耗时时，可以运行 benchmark runner：
+
+```powershell
+python -m signal_radar.benchmark `
+  --fixture fixtures/prompt_injection_browser_use.json `
+  --fixture fixtures/demo_report.json `
+  --output reports/benchmark.json
+```
+
+输出会保留每个用例的失败检查、总通过率以及最小/平均/P95/最大评测耗时；过程不访问网络、模型或浏览器。
+
 ### 运行历史与报告导出
 
 API 默认将运行记录和报告快照保存到 `data/runs.sqlite3`；`data/` 已加入 `.gitignore`，不会进入仓库。也可以通过 `SIGNAL_RADAR_HISTORY_DB` 指定数据库路径。
