@@ -147,6 +147,9 @@ export interface CapabilitiesResponse {
     reason: string
     enabled: boolean
     run_live: boolean
+    profile_configured: boolean
+    authorized_session: boolean
+    profile_reason: string
     allowed_domains: string[]
     max_steps: number
     timeout_seconds: number

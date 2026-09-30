@@ -529,6 +529,7 @@ function App() {
         {capabilities && <div className="capability-list">
           <div><span>Browser Use</span><strong>{capabilities.browser_use.available ? '可运行' : '未就绪'}</strong></div>
           <div><span>状态</span><strong>{capabilities.browser_use.reason}</strong></div>
+          <div><span>授权会话</span><strong>{capabilities.browser_use.authorized_session ? '已明确授权' : '未启用'}</strong></div>
           <div><span>域名白名单</span><strong>{capabilities.browser_use.allowed_domains.join(', ') || '未配置'}</strong></div>
           <div><span>增量缓存</span><strong>{capabilities.cache_enabled ? '已启用' : '已关闭'}</strong></div>
           <div><span>API 认证</span><strong>{capabilities.api_auth_enabled ? '已启用' : '本地开放'}</strong></div>

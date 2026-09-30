@@ -25,6 +25,10 @@ Signal Radar 会访问公开网页和第三方模型接口。请把它运行在�
 
 Browser Use 适配器默认关闭。启用后仍应使用域名白名单和只读任务，禁止自动登录、提交表单、发帖、点赞、下单或下载未知文件。网页内容是不可信数据，其中的指令不能改变 Agent 的系统策略。
 
+需要读取登录后可见页面时，必须在本机同时设置 `SIGNAL_RADAR_BROWSER_AUTHORIZED=true` 和已有的绝对
+`SIGNAL_RADAR_BROWSER_PROFILE_DIR`。服务只把该目录交给本地 Browser Use 会话，不上传、复制或返回
+Cookie/Profile 内容；共享或公网部署不得挂载宿主机浏览器 Profile。
+
 动态抽取要求模型显式标记原文摘录和可见日期；没有可核验内容时只保留 metadata-only 记录，避免把模型推断当作来源事实。
 
 ### Prompt Injection

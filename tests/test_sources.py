@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -230,6 +231,39 @@ class SourceAdapterTests(unittest.TestCase):
         self.assertEqual(result.status.status, "blocked")
         self.assertEqual(result.status.error, None)
         self.assertIn("allowlist", result.status.detail or "")
+
+    def test_browser_use_authorized_profile_is_explicit_and_passed_without_printing_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            class FakeSession:
+                def __init__(self, **kwargs):
+                    self.kwargs = kwargs
+
+            adapter = BrowserUseSourceAdapter(
+                enabled=True,
+                run_live=True,
+                api_key="test",
+                allowed_domains=["csdn.net"],
+                profile_dir=directory,
+                authorized_session=True,
+            )
+            fake_module = types.SimpleNamespace(BrowserSession=FakeSession)
+            session = adapter._build_session(fake_module, ["https://csdn.net/article/1"])
+            self.assertEqual(session.kwargs["user_data_dir"], directory)
+            self.assertEqual(session.kwargs["profile_directory"], "Default")
+            self.assertTrue(adapter.availability()["available"])
+
+    def test_browser_use_profile_requires_explicit_authorization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = BrowserUseSourceAdapter(
+                enabled=True,
+                run_live=True,
+                api_key="test",
+                allowed_domains=["csdn.net"],
+                profile_dir=directory,
+                authorized_session=False,
+            )
+            with patch.dict(sys.modules, {"browser_use": types.SimpleNamespace()}):
+                self.assertEqual(adapter.availability()["reason"], "authorized_profile_requires_opt_in")
 
     def test_browser_use_async_path_requires_allowlist_too(self) -> None:
         adapter = BrowserUseSourceAdapter(enabled=True, run_live=True, api_key="test")

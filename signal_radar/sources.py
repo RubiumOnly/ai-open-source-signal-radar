@@ -19,6 +19,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urljoin, urlparse
@@ -2057,6 +2058,23 @@ def _is_allowed_url(url: str, allowed_domains: Iterable[str]) -> bool:
     return any(hostname == domain or hostname.endswith(f".{domain}") for domain in domains)
 
 
+def _resolve_browser_profile(raw: str | Path | None) -> tuple[Path | None, str | None]:
+    """解析本地浏览器 Profile；不接受相对路径或不存在的目录。"""
+
+    if raw is None or not str(raw).strip():
+        return None, None
+    try:
+        candidate = Path(os.path.expandvars(os.path.expanduser(str(raw))))
+        if not candidate.is_absolute():
+            return None, "profile_path_must_be_absolute"
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None, "profile_path_invalid"
+    if not resolved.is_dir():
+        return None, "profile_path_not_found"
+    return resolved, None
+
+
 class BrowserRunCancelled(Exception):
     """Raised internally when a caller cancels an in-flight browser run."""
 
@@ -2093,6 +2111,9 @@ class BrowserUseSourceAdapter:
         model: str | None = None,
         max_steps: int = 12,
         timeout_seconds: float = 180.0,
+        profile_dir: str | Path | None = None,
+        profile_directory: str | None = None,
+        authorized_session: bool | None = None,
     ) -> None:
         self.enabled = enabled
         self.browser_api_key = api_key or os.getenv("BROWSER_USE_API_KEY")
@@ -2107,6 +2128,16 @@ class BrowserUseSourceAdapter:
         self.model = model or os.getenv("BROWSER_USE_MODEL") or default_model or ("deepseek-chat" if self.provider in {"deepseek", "deepseek-ai"} else "gpt-4o-mini")
         self.max_steps = max(1, min(int(max_steps), 40))
         self.timeout_seconds = max(1.0, min(float(timeout_seconds), 900.0))
+        configured_profile = profile_dir if profile_dir is not None else os.getenv("SIGNAL_RADAR_BROWSER_PROFILE_DIR")
+        self.profile_dir, self.profile_error = _resolve_browser_profile(configured_profile)
+        self.profile_directory = (
+            profile_directory
+            or os.getenv("SIGNAL_RADAR_BROWSER_PROFILE_NAME")
+            or "Default"
+        ).strip() or "Default"
+        if authorized_session is None:
+            authorized_session = os.getenv("SIGNAL_RADAR_BROWSER_AUTHORIZED", "false").strip().lower() in {"1", "true", "yes", "on"}
+        self.authorized_session = bool(authorized_session)
 
     def availability(self) -> dict[str, Any]:
         try:
@@ -2115,6 +2146,12 @@ class BrowserUseSourceAdapter:
             return {"available": False, "reason": "dependency_missing"}
         if not self.api_key:
             return {"available": False, "reason": "auth_required"}
+        if self.profile_error:
+            return {"available": False, "reason": self.profile_error}
+        if self.authorized_session and self.profile_dir is None:
+            return {"available": False, "reason": "authorized_profile_missing"}
+        if self.profile_dir is not None and not self.authorized_session:
+            return {"available": False, "reason": "authorized_profile_requires_opt_in"}
         if not self.enabled:
             return {"available": False, "reason": "disabled"}
         if not self.run_live:
@@ -2124,8 +2161,16 @@ class BrowserUseSourceAdapter:
         return {"available": True, "reason": "opt_in"}
 
     def _skipped_result(self, reason: str) -> SourceFetchResult:
-        status = "auth_required" if reason == "auth_required" else "blocked" if reason == "allowlist_missing" else "disabled"
-        access = "auth_required" if reason == "auth_required" else "blocked" if reason == "allowlist_missing" else "not_configured"
+        auth_reasons = {
+            "auth_required",
+            "authorized_profile_missing",
+            "authorized_profile_requires_opt_in",
+            "profile_path_invalid",
+            "profile_path_must_be_absolute",
+            "profile_path_not_found",
+        }
+        status = "auth_required" if reason in auth_reasons else "blocked" if reason == "allowlist_missing" else "disabled"
+        access = "auth_required" if reason in auth_reasons else "blocked" if reason == "allowlist_missing" else "not_configured"
         return SourceFetchResult(
             status=SourceStatus(
                 source="Browser Use",
@@ -2134,6 +2179,7 @@ class BrowserUseSourceAdapter:
                 access_status=access,  # type: ignore[arg-type]
                 records=0,
                 detail=f"Dynamic collection skipped ({reason})",
+                authenticated=False,
             )
         )
 
@@ -2294,6 +2340,7 @@ class BrowserUseSourceAdapter:
                 records=len(result.articles),
                 detail=detail,
                 latency_ms=_latency(started),
+                authenticated=self.authorized_session,
             )
             return result
         except BrowserRunCancelled:
@@ -2421,13 +2468,27 @@ class BrowserUseSourceAdapter:
             browser_session = getattr(browser_use, "Browser", None)
         if browser_session is None:
             raise RuntimeError("browser-use has no compatible BrowserSession")
+        session_kwargs: dict[str, Any] = {"headless": True, "allowed_domains": domains}
+        if self.authorized_session:
+            if self.profile_dir is None:
+                raise RuntimeError("authorized browser profile is not configured")
+            session_kwargs.update({
+                "user_data_dir": str(self.profile_dir),
+                "profile_directory": self.profile_directory,
+            })
         try:
-            return browser_session(headless=True, allowed_domains=domains)
-        except TypeError:
+            return browser_session(**session_kwargs)
+        except TypeError as session_error:
             profile_cls = getattr(browser_use, "BrowserProfile", None)
             if profile_cls is None:
-                raise
-            return browser_session(browser_profile=profile_cls(headless=True, allowed_domains=domains))
+                raise RuntimeError("browser-use has no compatible browser profile support") from session_error
+            try:
+                profile = profile_cls(**session_kwargs)
+            except TypeError as profile_error:
+                if self.authorized_session:
+                    raise RuntimeError("browser-use does not support the configured authorized profile") from profile_error
+                profile = profile_cls(headless=True, allowed_domains=domains)
+            return browser_session(browser_profile=profile)
 
     @staticmethod
     def _build_task(urls: list[str]) -> str:
@@ -2440,7 +2501,7 @@ class BrowserUseSourceAdapter:
             "quote or excerpt only when text is visibly present and set excerpt_exact=true; never copy the title "
             "into excerpt. Include publication time only when the exact date is visibly present, set "
             "published_at_observed=true, and otherwise use null/false. Never infer dates from relative labels or "
-            "the current date. Include stance (support/oppose/neutral/uncertain), sentiment, topics, and a "
+            "the current date. Never perform login or change the existing session. Include stance (support/oppose/neutral/uncertain), sentiment, topics, and a "
             "conservative confidence between 0 and 1.\n\nURLs:\n" + url_lines
         )
 

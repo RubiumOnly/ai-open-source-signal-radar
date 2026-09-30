@@ -269,6 +269,17 @@ $env:ANONYMIZED_TELEMETRY = "false"
 uvicorn signal_radar.api:app --port 8000
 ```
 
+如果确实需要读取登录后可见页面（例如 CSDN），还必须在本机明确授权已有浏览器 Profile：
+
+```powershell
+$env:SIGNAL_RADAR_BROWSER_AUTHORIZED = "true"
+$env:SIGNAL_RADAR_BROWSER_PROFILE_DIR = "C:\Users\you\AppData\Local\Google\Chrome\User Data"
+$env:SIGNAL_RADAR_BROWSER_PROFILE_NAME = "Default"
+```
+
+系统不会自动登录、提交、点赞或评论；Profile 路径必须是本地已有绝对目录，能力探针只显示“已授权/未启用”，
+不会返回路径、Cookie 或其他凭据。共享或公网部署不要挂载个人浏览器 Profile。
+
 然后只向白名单 URL 发起只读运行；页面中的指令不会被当作系统指令执行：
 
 ```powershell
