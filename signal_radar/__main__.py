@@ -16,6 +16,7 @@ except ImportError:
     pass
 
 from .api import _live_report
+from .cache import DEFAULT_CACHE_PATH, SourceCache
 from .history import HistoryStore
 from .models import Run, RunRequest, RunResponse, SchedulerRequest
 from .repository import load_fixture_report
@@ -69,8 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _env_flag(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+def _env_flag(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -86,6 +87,13 @@ def _browser_adapter(args: argparse.Namespace) -> BrowserUseSourceAdapter:
         item.strip()
         for item in os.getenv("SIGNAL_RADAR_BROWSER_ALLOWED_DOMAINS", "").split(",")
         if item.strip()
+    )
+    return BrowserUseSourceAdapter(
+        enabled=args.enable_browser_use or _env_flag("SIGNAL_RADAR_BROWSER_ENABLED"),
+        run_live=args.browser_run_live or _env_flag("SIGNAL_RADAR_BROWSER_RUN_LIVE"),
+        allowed_domains=domains,
+        max_steps=_env_int("SIGNAL_RADAR_BROWSER_MAX_STEPS", 12, 1, 40),
+        timeout_seconds=_env_int("SIGNAL_RADAR_BROWSER_TIMEOUT_SECONDS", 180, 1, 900),
     )
 
 
@@ -122,14 +130,24 @@ def _scheduled_cli(args: argparse.Namespace) -> int:
         run_immediately=args.schedule_run_immediately,
     )
     history = HistoryStore(os.getenv("SIGNAL_RADAR_HISTORY_DB") or "data/runs.sqlite3")
-    github = GitHubSourceAdapter()
+    cache = SourceCache(os.getenv("SIGNAL_RADAR_CACHE_DB") or DEFAULT_CACHE_PATH) if _env_flag("SIGNAL_RADAR_CACHE_ENABLED", True) else None
+    github = GitHubSourceAdapter(cache=cache, max_pages=_env_int("SIGNAL_RADAR_GITHUB_MAX_PAGES", 4, 1, 20))
     browser = _browser_adapter(args)
     rss = RSSSourceAdapter(
-        feed_urls=tuple(item.strip() for item in os.getenv("SIGNAL_RADAR_RSS_FEEDS", "").split(",") if item.strip())
+        feed_urls=tuple(item.strip() for item in os.getenv("SIGNAL_RADAR_RSS_FEEDS", "").split(",") if item.strip()),
+        cache=cache,
     )
     hackernews = HackerNewsSourceAdapter(
         timeout=float(_env_int("SIGNAL_RADAR_HACKERNEWS_TIMEOUT", 8, 1, 60)),
         max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 50, 1, 100),
+        max_pages=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_PAGES", 4, 1, 20),
+        cache=cache,
+    )
+    reddit = RedditSourceAdapter(
+        timeout=float(_env_int("SIGNAL_RADAR_REDDIT_TIMEOUT", 8, 1, 60)),
+        max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 50, 1, 100),
+        max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 4, 1, 20),
+        cache=cache,
     )
 
     def execute(payload: RunRequest) -> RunResponse:
@@ -151,6 +169,7 @@ def _scheduled_cli(args: argparse.Namespace) -> int:
                     browser=browser,
                     rss=rss,
                     hackernews=hackernews,
+                    reddit=reddit,
                 )
                 status = "completed" if all(item.status in {"ok", "replay"} for item in statuses) else "partial"
                 error = None
@@ -190,19 +209,14 @@ def _scheduled_cli(args: argparse.Namespace) -> int:
         state = scheduler.stop()
     finally:
         history.close()
+        if cache is not None:
+            cache.close()
     output = state.model_dump_json(indent=2, exclude_none=False)
     if args.output:
         args.output.write_text(output + "\n", encoding="utf-8")
     else:
         sys.stdout.write(output + "\n")
     return 0
-    return BrowserUseSourceAdapter(
-        enabled=args.enable_browser_use or _env_flag("SIGNAL_RADAR_BROWSER_ENABLED"),
-        run_live=args.browser_run_live or _env_flag("SIGNAL_RADAR_BROWSER_RUN_LIVE"),
-        allowed_domains=domains,
-        max_steps=_env_int("SIGNAL_RADAR_BROWSER_MAX_STEPS", 12, 1, 40),
-        timeout_seconds=_env_int("SIGNAL_RADAR_BROWSER_TIMEOUT_SECONDS", 180, 1, 900),
-    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -240,27 +254,40 @@ def main(argv: list[str] | None = None) -> int:
             max_steps=args.max_steps,
             timeout_seconds=args.timeout_seconds,
         )
-        report, _ = _live_report(
-            request,
-            run_id=run_id,
-            github=GitHubSourceAdapter(),
-            browser=_browser_adapter(args),
-            rss=RSSSourceAdapter(
-                feed_urls=tuple(
-                    item.strip()
-                    for item in os.getenv("SIGNAL_RADAR_RSS_FEEDS", "").split(",")
-                    if item.strip()
-                )
-            ),
-            hackernews=HackerNewsSourceAdapter(
-                timeout=float(_env_int("SIGNAL_RADAR_HACKERNEWS_TIMEOUT", 8, 1, 60)),
-                max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 50, 1, 100),
-            ),
-            reddit=RedditSourceAdapter(
-                timeout=float(_env_int("SIGNAL_RADAR_REDDIT_TIMEOUT", 8, 1, 60)),
-                max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 50, 1, 100),
-            ),
-        )
+        cache = SourceCache(os.getenv("SIGNAL_RADAR_CACHE_DB") or DEFAULT_CACHE_PATH) if _env_flag("SIGNAL_RADAR_CACHE_ENABLED", True) else None
+        try:
+            report, _ = _live_report(
+                request,
+                run_id=run_id,
+                github=GitHubSourceAdapter(
+                    cache=cache,
+                    max_pages=_env_int("SIGNAL_RADAR_GITHUB_MAX_PAGES", 4, 1, 20),
+                ),
+                browser=_browser_adapter(args),
+                rss=RSSSourceAdapter(
+                    feed_urls=tuple(
+                        item.strip()
+                        for item in os.getenv("SIGNAL_RADAR_RSS_FEEDS", "").split(",")
+                        if item.strip()
+                    ),
+                    cache=cache,
+                ),
+                hackernews=HackerNewsSourceAdapter(
+                    timeout=float(_env_int("SIGNAL_RADAR_HACKERNEWS_TIMEOUT", 8, 1, 60)),
+                    max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 50, 1, 100),
+                    max_pages=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_PAGES", 4, 1, 20),
+                    cache=cache,
+                ),
+                reddit=RedditSourceAdapter(
+                    timeout=float(_env_int("SIGNAL_RADAR_REDDIT_TIMEOUT", 8, 1, 60)),
+                    max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 50, 1, 100),
+                    max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 4, 1, 20),
+                    cache=cache,
+                ),
+            )
+        finally:
+            if cache is not None:
+                cache.close()
     output = report.model_dump_json(indent=2, exclude_none=False)
     if args.output:
         args.output.write_text(output + "\n", encoding="utf-8")

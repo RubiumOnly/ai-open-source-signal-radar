@@ -39,7 +39,7 @@ Browser Use 回退：动态页面、跨页上下文、授权后的本地会话
       |
 结构化抽取：事件、主题、立场、证据、访问状态
       |
-去重与聚类  ->  风险评分  ->  JSON / Markdown 报告
+增量缓存 + 分页去重  ->  风险评分  ->  JSON / Markdown 报告
       |
 SSE 事件、Trace、URL、截图、失败记录、评测指标
 ```
@@ -205,9 +205,25 @@ GET  /api/runs/{run_id}/events         获取已保存的运行事件
 GET  /api/runs/{run_id}/trace          回放同一组结构化事件
 POST /api/runs/{run_id}/follow-up      基于已有报告创建有界补查
 GET  /api/runs/{run_id}                查询运行和报告
+GET  /api/metrics                      查看当前与历史来源质量指标
 ```
 
 工作台的“运行历史”直接读取 SQLite 运行记录。选择某次运行后，页面会恢复该运行的报告、来源状态和结构化事件；服务重启后仍可回放，不依赖进程内缓存。
+
+### 增量缓存与分页
+
+Live 运行默认启用本地来源元数据缓存（`data/source-cache.sqlite3`）。缓存只保存
+HTTP 的 `ETag`、`Last-Modified`、响应摘要和记录指纹，不保存正文、Cookie、浏览器
+Profile 或模型密钥。重复运行会优先发送条件请求；相同记录不会再次进入分析，内容
+发生变化的记录会作为更新重新分析。每个来源状态会记录 `pages`、`latency_ms`、
+`new_records`、`duplicate_records`、`total_candidates` 和 `cache_hit`，工作台的来源
+面板与运行事件会显示这些指标。
+
+GitHub、Hacker News 和 Reddit 使用有界分页（默认最多 4 页，可分别通过
+`SIGNAL_RADAR_GITHUB_MAX_PAGES`、`SIGNAL_RADAR_HACKERNEWS_MAX_PAGES` 和
+`SIGNAL_RADAR_REDDIT_MAX_PAGES` 调整）；RSS/Atom 使用响应校验器和跨 feed 去重。
+可以通过 `SIGNAL_RADAR_CACHE_ENABLED=false` 关闭缓存，或设置
+`SIGNAL_RADAR_CACHE_DB` 使用其他本地路径。关闭缓存不会改变来源的只读和页数上限。
 
 Browser Use 动态采集是显式开启的可选路径。先安装额外依赖，在本地环境变量中配置模型 Key，
 再把 `SIGNAL_RADAR_BROWSER_ENABLED` 和 `SIGNAL_RADAR_BROWSER_RUN_LIVE` 都设为 `true`：
@@ -344,7 +360,7 @@ python -m signal_radar.evaluate `
 ```
 
 输出是可复现的 JSON，主要字段包括 `schema_valid`、`citation_coverage`、
-`source_coverage`、`event_consistency`、`checks` 和 `passed`。`schema_valid=true`
+`source_coverage`、`event_consistency`、`performance`、`checks` 和 `passed`。`schema_valid=true`
 只表示 fixture 能通过 `Report` 契约校验；如果历史 fixture 的汇总数字与明细不一致，
 评测会保留该报告并将对应一致性检查标为 `false`，不会静默回退到演示数据。输入 JSON
 无法解析时命令返回非零退出码，并在 `schema_errors` 中给出可读原因。
@@ -478,11 +494,11 @@ GitHub 仓库包含完整源码、测试、fixture 和运行文档。推荐先�
 
 ## Replay 回退预览
 
-下面是旧版静态 Replay 页面加载真实 fixture 后生成的截图，桌面和移动视口均已验证。React 工作台的运行入口见上面的 `frontend/` 章节：
+下面是 React 研究工作台加载真实 Replay API 后生成的截图，桌面和移动视口均已验证。旧版静态 Replay 页面仍保留为回退入口：
 
-![旧版 Replay 桌面预览](docs/images/signal-radar-dashboard-desktop.png)
+![React 研究工作台桌面预览](docs/images/signal-radar-workbench-desktop.png)
 
-![旧版 Replay 移动预览](docs/images/signal-radar-dashboard-mobile.png)
+![React 研究工作台移动预览](docs/images/signal-radar-workbench-mobile.png)
 
 建议按以下顺序启动一个本地运行：
 
@@ -542,7 +558,7 @@ tests/              不需要网络/API Key 的契约与单元测试
 - 已启动 React 工作台重构：研究简报、来源预览、运行监控、风险信号和证据卡片已接入 Replay/API；
 - 登录来源仍保持只读和人工授权边界，不绕过验证码、付费墙或访问控制。
 
-后续重构重点是完善报告 Trace 回放、增量缓存、更多确定性页面适配器和授权浏览器 Worker；现有安全、预算、取消、标注和离线评测能力必须保持。
+后续重构重点是完善独立 Trace 视图、更多确定性页面适配器和授权浏览器 Worker；现有安全、预算、取消、标注、缓存和离线评测能力必须保持。
 
 ## 设计与工程要点
 

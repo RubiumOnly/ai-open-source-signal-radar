@@ -70,13 +70,23 @@ def _coherent_report():
 
 class EvaluationTests(unittest.TestCase):
     def test_coherent_report_passes_reproducible_checks(self) -> None:
-        result = evaluate_report(_coherent_report())
+        report = _coherent_report()
+        report.sources[0].latency_ms = 120.0
+        report.sources[0].pages = 2
+        report.sources[0].total_candidates = 3
+        report.sources[0].new_records = 2
+        report.sources[0].duplicate_records = 1
+        report.sources[0].cache_hit = True
+        result = evaluate_report(report)
         self.assertTrue(result["schema_valid"])
         self.assertTrue(result["passed"])
         self.assertEqual(result["citation_coverage"]["overall_pct"], 100.0)
         self.assertEqual(result["source_coverage"]["available_pct"], 100.0)
         self.assertTrue(result["event_consistency"]["summary_count_matches"])
         self.assertTrue(result["event_consistency"]["summary_risk_score_matches"])
+        self.assertEqual(result["performance"]["latency_ms"]["p95_ms"], 120.0)
+        self.assertEqual(result["performance"]["duplicate_rate_pct"], 33.3)
+        self.assertTrue(result["checks"]["source_metrics_consistent"])
 
     def test_inconsistent_fixture_surfaces_semantic_inconsistency(self) -> None:
         result = evaluate_fixture(ROOT / "fixtures" / "evaluation_inconsistent.json")

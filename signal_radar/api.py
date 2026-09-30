@@ -7,6 +7,7 @@ import json
 import uuid
 import os
 import inspect
+import math
 import secrets
 import threading
 import time
@@ -32,6 +33,7 @@ from .models import (
     SchedulerState,
     SourceStatus,
 )
+from .cache import DEFAULT_CACHE_PATH, SourceCache
 from .history import DEFAULT_HISTORY_PATH, HistoryStore
 from .repository import FixtureReportRepository, load_fixture_report
 from .scoring import aggregate_report
@@ -198,6 +200,33 @@ def _access_from_sources(statuses: list[SourceStatus]) -> list[AccessStatusRecor
     ]
 
 
+def _metrics_snapshot(statuses: list[SourceStatus]) -> dict[str, Any]:
+    """将来源状态压缩为工作台可展示的运行质量指标。"""
+
+    latencies = sorted(float(status.latency_ms) for status in statuses if status.latency_ms is not None)
+    p95 = latencies[min(len(latencies) - 1, max(0, math.ceil(len(latencies) * 0.95) - 1))] if latencies else None
+    candidates = sum(status.total_candidates for status in statuses)
+    duplicates = sum(status.duplicate_records for status in statuses)
+    cache_observed = [status for status in statuses if status.cache_hit or status.total_candidates > 0]
+    return {
+        "source_count": len(statuses),
+        "latency_ms": {
+            "avg": round(sum(latencies) / len(latencies), 1) if latencies else None,
+            "p95": round(p95, 1) if p95 is not None else None,
+            "max": round(latencies[-1], 1) if latencies else None,
+        },
+        "pages": sum(status.pages for status in statuses),
+        "new_records": sum(status.new_records for status in statuses),
+        "duplicate_records": duplicates,
+        "total_candidates": candidates,
+        "duplicate_rate_pct": round(duplicates / candidates * 100.0, 1) if candidates else None,
+        "cache_hit_pct": round(
+            sum(1 for status in cache_observed if status.cache_hit) / len(cache_observed) * 100.0,
+            1,
+        ) if cache_observed else None,
+    }
+
+
 def _timeout_result(source: str, *, detail: str, latency_ms: float | None = None) -> SourceFetchResult:
     return SourceFetchResult(
         status=SourceStatus(
@@ -343,6 +372,9 @@ async def _live_report_async(
                 id=f"event-{uuid.uuid4().hex[:12]}", run_id=run_id,
                 type="source_completed", stage="collect", source=status.source,
                 status=status.status, records=status.records, latency_ms=status.latency_ms,
+                pages=status.pages, cache_hit=status.cache_hit,
+                new_records=status.new_records, duplicate_records=status.duplicate_records,
+                total_candidates=status.total_candidates,
                 message=status.detail or f"{status.source} 采集完成",
             ))
         return result
@@ -422,6 +454,7 @@ def create_app(
     hackernews_adapter: HackerNewsSourceAdapter | None = None,
     reddit_adapter: RedditSourceAdapter | None = None,
     history_store: HistoryStore | None = None,
+    source_cache: SourceCache | None = None,
     api_token: str | None = None,
 ) -> Any:
     """构建支持注入存储和适配器的应用，便于测试。
@@ -436,7 +469,14 @@ def create_app(
     configured_api_token = api_token if api_token is not None else os.getenv("SIGNAL_RADAR_API_TOKEN")
     configured_api_token = configured_api_token.strip() if configured_api_token else None
     repository = repository or FixtureReportRepository()
-    github_adapter = github_adapter or GitHubSourceAdapter()
+    cache_enabled = _env_flag("SIGNAL_RADAR_CACHE_ENABLED", True)
+    source_cache = source_cache or (
+        SourceCache(os.getenv("SIGNAL_RADAR_CACHE_DB") or DEFAULT_CACHE_PATH) if cache_enabled else None
+    )
+    github_adapter = github_adapter or GitHubSourceAdapter(
+        cache=source_cache,
+        max_pages=_env_int("SIGNAL_RADAR_GITHUB_MAX_PAGES", 4, 1, 20),
+    )
     browser_adapter = browser_adapter or BrowserUseSourceAdapter(
         enabled=_env_flag("SIGNAL_RADAR_BROWSER_ENABLED"),
         run_live=_env_flag("SIGNAL_RADAR_BROWSER_RUN_LIVE"),
@@ -454,14 +494,19 @@ def create_app(
             for item in os.getenv("SIGNAL_RADAR_RSS_FEEDS", "").split(",")
             if item.strip()
         ),
+        cache=source_cache,
     )
     hackernews_adapter = hackernews_adapter or HackerNewsSourceAdapter(
         timeout=_env_int("SIGNAL_RADAR_HACKERNEWS_TIMEOUT", 8, 1, 60),
         max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 50, 1, 100),
+        max_pages=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_PAGES", 4, 1, 20),
+        cache=source_cache,
     )
     reddit_adapter = reddit_adapter or RedditSourceAdapter(
         timeout=_env_int("SIGNAL_RADAR_REDDIT_TIMEOUT", 8, 1, 60),
         max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 50, 1, 100),
+        max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 4, 1, 20),
+        cache=source_cache,
     )
     history_store = history_store or HistoryStore(
         os.getenv("SIGNAL_RADAR_HISTORY_DB") or DEFAULT_HISTORY_PATH
@@ -485,6 +530,7 @@ def create_app(
     service.state.latest_report = None
     service.state.latest_run = None
     service.state.history_store = history_store
+    service.state.source_cache = source_cache
     service.state.active_controls: dict[str, RunControl] = {}
     service.state.run_workers: dict[str, threading.Thread] = {}
     # Scheduler creation is deliberately side-effect free. It starts only when
@@ -550,6 +596,19 @@ def create_app(
     def sources() -> list[SourceStatus]:
         report_value = service.state.latest_report or repository.get_report()
         return report_value.sources
+
+    @service.get("/api/metrics")
+    def metrics() -> dict[str, Any]:
+        """返回当前报告与最近历史运行的来源质量指标。"""
+
+        report_value = service.state.latest_report or repository.get_report()
+        history = history_store.list(limit=100)
+        history_statuses = [status for run in history for status in run.source_statuses]
+        return {
+            "current": _metrics_snapshot(report_value.sources),
+            "history": _metrics_snapshot(history_statuses),
+            "runs": len(history),
+        }
 
     @service.get("/api/runs", response_model=list[Run], dependencies=[Depends(require_api_token)])
     def runs(

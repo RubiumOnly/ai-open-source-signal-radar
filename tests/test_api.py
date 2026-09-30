@@ -149,6 +149,23 @@ class LiveOrchestrationTests(unittest.TestCase):
         )
         self.assertEqual(hackernews.calls[0][0], "browser-use agent")
 
+    def test_metrics_endpoint_returns_current_and_history_snapshots(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from signal_radar.history import HistoryStore
+
+        store = HistoryStore(":memory:")
+        self.addCleanup(store.close)
+        client = TestClient(create_app(history_store=store))
+        response = client.post("/api/run", json={"mode": "replay"})
+        self.assertEqual(response.status_code, 200)
+        metrics = client.get("/api/metrics")
+        self.assertEqual(metrics.status_code, 200)
+        payload = metrics.json()
+        self.assertIn("current", payload)
+        self.assertIn("history", payload)
+        self.assertEqual(payload["runs"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

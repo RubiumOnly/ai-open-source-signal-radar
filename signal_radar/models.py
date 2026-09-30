@@ -198,6 +198,13 @@ class SourceStatus(ContractModel):
     fetched_at: datetime = Field(default_factory=utc_now)
     latency_ms: float | None = Field(default=None, ge=0.0)
     authenticated: bool = False
+    # 采集质量与增量运行指标；旧 fixture 缺省时仍可正常解析。
+    pages: int = Field(default=1, ge=0)
+    cache_hit: bool = False
+    new_records: int = Field(default=0, ge=0)
+    duplicate_records: int = Field(default=0, ge=0)
+    total_candidates: int = Field(default=0, ge=0)
+    next_cursor: str | None = None
 
 
 class AccessStatusRecord(ContractModel):
@@ -369,6 +376,11 @@ class RunEvent(ContractModel):
     status: str | None = None
     records: int = 0
     latency_ms: float | None = None
+    pages: int = 0
+    cache_hit: bool = False
+    new_records: int = 0
+    duplicate_records: int = 0
+    total_candidates: int = 0
     message: str = ""
     created_at: datetime = Field(default_factory=utc_now)
 

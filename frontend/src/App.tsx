@@ -25,8 +25,8 @@ import {
   TerminalSquare,
   XCircle,
 } from 'lucide-react'
-import type { Event, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SourceStatus } from './types'
-import { createPlan, fetchReport, fetchRun, fetchRuns, fetchTrace, followUp, startRun, streamRun } from './lib/api'
+import type { Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SourceStatus } from './types'
+import { createPlan, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchTrace, followUp, startRun, streamRun } from './lib/api'
 
 const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变化、安装兼容性和社区反馈'
 
@@ -101,9 +101,11 @@ function App() {
   const [followUpQuery, setFollowUpQuery] = useState('')
   const [runHistory, setRunHistory] = useState<Run[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
 
   useEffect(() => {
     fetchReport().then(setReport).catch(() => setError('API 尚未启动，运行 Replay 后即可加载报告。'))
+    fetchMetrics().then(setMetrics).catch(() => undefined)
     refreshHistory()
   }, [])
 
@@ -123,6 +125,10 @@ function App() {
     } finally {
       setHistoryLoading(false)
     }
+  }
+
+  async function refreshMetrics() {
+    try { setMetrics(await fetchMetrics()) } catch { /* 指标接口不可用时不影响主报告 */ }
   }
 
   async function makePlan() {
@@ -154,6 +160,7 @@ function App() {
       const finished = await fetchRun(started.run.run_id)
       setReport(finished.report ?? null)
       await refreshHistory()
+      await refreshMetrics()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '运行失败，请检查 API、来源配置和权限。')
     } finally {
@@ -177,6 +184,7 @@ function App() {
       setReport(finished.report ?? null)
       setFollowUpQuery('')
       await refreshHistory()
+      await refreshMetrics()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '补查失败，请检查运行状态和来源权限。')
     } finally {
@@ -335,6 +343,12 @@ function App() {
             <MetricCard label="证据条目" value={report?.evidence.length ?? 0} detail="可回链的来源片段" icon={<FileSearch size={16} />} />
             <MetricCard label="覆盖率" value={`${Math.round(report?.summary.coverage_pct ?? 0)}%`} detail="来源与时间窗口覆盖" icon={<Activity size={16} />} />
           </div>
+          {metrics && <div className="telemetry-strip">
+            <TelemetryItem label="平均延迟" value={metrics.current.latency_ms.avg == null ? '—' : `${Math.round(metrics.current.latency_ms.avg)} ms`} detail={`P95 ${metrics.current.latency_ms.p95 == null ? '—' : `${Math.round(metrics.current.latency_ms.p95)} ms`}`} />
+            <TelemetryItem label="缓存命中" value={metrics.current.cache_hit_pct == null ? '—' : `${Math.round(metrics.current.cache_hit_pct)}%`} detail={`${metrics.current.pages} 页采集`} />
+            <TelemetryItem label="新增记录" value={metrics.current.new_records} detail={`${metrics.current.total_candidates} 条候选`} />
+            <TelemetryItem label="重复率" value={metrics.current.duplicate_rate_pct == null ? '—' : `${Math.round(metrics.current.duplicate_rate_pct)}%`} detail={`${metrics.current.duplicate_records} 条重复`} />
+          </div>}
         </section>
 
         <section className="workspace-section" id="workspace">
@@ -417,14 +431,32 @@ function MetricCard({ label, value, detail, icon }: { label: string; value: stri
   return <div className="metric-card"><span className="metric-label">{icon}{label}</span><strong>{value}</strong><span className="metric-foot">{detail}</span></div>
 }
 
+function TelemetryItem({ label, value, detail }: { label: string; value: string | number; detail: string }) {
+  return <div className="telemetry-item"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>
+}
+
 function RunEventRow({ event }: { event: RunEvent }) {
   const isDone = event.type === 'completed' || event.type === 'source_completed'
-  return <div className="activity-row"><span className={`activity-icon ${isDone ? 'activity-icon-done' : ''}`}>{isDone ? <Check size={13} /> : <Activity size={13} />}</span><div><strong>{event.message || event.type}</strong><span>{event.source ? sourceName(event.source) : event.stage || 'system'}{event.records ? ` · ${event.records} 条` : ''}</span></div><time>{formatTime(event.created_at)}</time></div>
+  const metrics = [
+    event.new_records || event.records ? `${event.new_records || event.records} 新` : '',
+    event.duplicate_records ? `${event.duplicate_records} 重复` : '',
+    event.latency_ms ? `${Math.round(event.latency_ms)} ms` : '',
+    event.pages && event.pages > 1 ? `${event.pages} 页` : '',
+    event.cache_hit ? '缓存命中' : '',
+  ].filter(Boolean).join(' · ')
+  return <div className="activity-row"><span className={`activity-icon ${isDone ? 'activity-icon-done' : ''}`}>{isDone ? <Check size={13} /> : <Activity size={13} />}</span><div><strong>{event.message || event.type}</strong><span>{event.source ? sourceName(event.source) : event.stage || 'system'}{metrics ? ` · ${metrics}` : ''}</span></div><time>{formatTime(event.created_at)}</time></div>
 }
 
 function SourceRow({ source }: { source: SourceStatus }) {
   const status = sourceStatus(source)
-  return <div className="source-row"><div className={`source-signal source-signal-${statusTone(status)}`} /><div className="source-name"><strong>{sourceName(source.source)}</strong><span>{source.source_type}</span></div><span className={`source-status source-status-${statusTone(status)}`}>{statusLabels[status] ?? status}</span><span className="source-count">{source.records}</span></div>
+  const metrics = [
+    source.new_records || source.records ? `${source.new_records || source.records} 新` : '0 新',
+    source.duplicate_records ? `${source.duplicate_records} 重复` : '',
+    source.latency_ms ? `${Math.round(source.latency_ms)} ms` : '',
+    source.pages && source.pages > 1 ? `${source.pages} 页` : '',
+    source.cache_hit ? '缓存命中' : '',
+  ].filter(Boolean).join(' · ')
+  return <div className="source-row"><div className={`source-signal source-signal-${statusTone(status)}`} /><div className="source-name"><strong>{sourceName(source.source)}</strong><span>{source.source_type} · {metrics}</span></div><span className={`source-status source-status-${statusTone(status)}`}>{statusLabels[status] ?? status}</span><span className="source-count">{source.records}</span></div>
 }
 
 function HistoryRow({ run, active, onSelect }: { run: Run; active: boolean; onSelect: (runId: string) => void }) {

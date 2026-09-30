@@ -128,6 +128,50 @@ def _event_metrics(report: Report) -> dict[str, Any]:
     }
 
 
+def _performance_metrics(report: Report) -> dict[str, Any]:
+    """汇总来源延迟、分页和增量缓存指标。
+
+    旧 fixture 没有这些字段时返回 ``observed_sources=0``，不会把历史报告
+    判为失败；新运行若显式提供候选数，则校验新增与重复记录是否闭合。
+    """
+
+    statuses = report.sources
+    observed = [status for status in statuses if status.latency_ms is not None]
+    latencies = sorted(float(status.latency_ms) for status in observed if status.latency_ms is not None)
+    if latencies:
+        p95_index = min(len(latencies) - 1, max(0, math.ceil(len(latencies) * 0.95) - 1))
+        latency = {
+            "min_ms": round(latencies[0], 1),
+            "avg_ms": round(sum(latencies) / len(latencies), 1),
+            "p95_ms": round(latencies[p95_index], 1),
+            "max_ms": round(latencies[-1], 1),
+        }
+    else:
+        latency = {"min_ms": None, "avg_ms": None, "p95_ms": None, "max_ms": None}
+    cache_observed = [status for status in statuses if status.cache_hit or status.total_candidates > 0]
+    candidates = sum(status.total_candidates for status in statuses)
+    new_records = sum(status.new_records for status in statuses)
+    duplicate_records = sum(status.duplicate_records for status in statuses)
+    metric_mismatches = [
+        status.source
+        for status in statuses
+        if status.total_candidates > 0
+        and status.new_records + status.duplicate_records > status.total_candidates
+    ]
+    return {
+        "observed_sources": len(observed),
+        "latency_ms": latency,
+        "pages": sum(status.pages for status in statuses),
+        "cache_hit_pct": _pct(sum(1 for status in cache_observed if status.cache_hit), len(cache_observed)) if cache_observed else None,
+        "new_records": new_records,
+        "duplicate_records": duplicate_records,
+        "total_candidates": candidates,
+        "duplicate_rate_pct": _pct(duplicate_records, candidates) if candidates else None,
+        "metric_mismatches": sorted(metric_mismatches),
+        "metrics_consistent": not metric_mismatches,
+    }
+
+
 def _security_metrics(report: Report) -> dict[str, Any]:
     """检查报告是否保留了浏览器只读边界和元数据证据边界。
 
@@ -214,6 +258,7 @@ def evaluate_report(
     citations = _citation_metrics(report)
     sources = _source_metrics(report)
     events = _event_metrics(report)
+    performance = _performance_metrics(report)
     security = _security_metrics(report)
     annotation_metrics = _annotation_metrics(report, annotations or [])
     checks = {
@@ -229,6 +274,7 @@ def evaluate_report(
         "unauthorized_action_target_zero": security["unauthorized_action_target"] == 0,
         "metadata_only_quotes_empty": security["metadata_only_quotes_empty"],
         "annotations_reference_report": annotation_metrics["orphan_count"] == 0,
+        "source_metrics_consistent": performance["metrics_consistent"],
     }
     return {
         "evaluator_version": EVALUATOR_VERSION,
@@ -245,6 +291,7 @@ def evaluate_report(
         "citation_coverage": citations,
         "source_coverage": sources,
         "event_consistency": events,
+        "performance": performance,
         "security": security,
         "annotations": annotation_metrics,
         "annotation_fixture": annotation_fixture,
@@ -327,6 +374,7 @@ def _invalid_result(fixture: str, errors: list[str]) -> dict[str, Any]:
         "citation_coverage": None,
         "source_coverage": None,
         "event_consistency": None,
+        "performance": None,
         "annotations": None,
         "annotation_fixture": None,
         "annotation_schema_valid": False,

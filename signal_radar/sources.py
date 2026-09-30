@@ -26,6 +26,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, Field
 
+from .cache import SourceCache
 from .models import Article, Claim, Event, Evidence, SourceStatus
 
 
@@ -65,6 +66,7 @@ class _FeedFetch:
     format: str = "rss"
     error: str | None = None
     status_code: int | None = None
+    cache_hit: bool = False
 
 
 class BrowserRecord(BaseModel):
@@ -100,6 +102,15 @@ def _parse_time(value: Any) -> datetime | None:
         except (TypeError, ValueError, IndexError):
             return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _cache_time_key(value: datetime | None) -> str:
+    """将滚动时间窗口压缩到日期，避免每小时调度产生全新缓存键。"""
+
+    if value is None:
+        return "all"
+    normalized = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return normalized.astimezone(timezone.utc).date().isoformat()
 
 
 def _hash_text(value: str) -> str:
@@ -142,19 +153,31 @@ class GitHubSourceAdapter:
         token: str | None = None,
         timeout: float = 8.0,
         max_limit: int = 50,
+        max_pages: int = 4,
+        cache: SourceCache | None = None,
         opener: JsonOpener | None = None,
     ) -> None:
         self.token = token or os.getenv("GITHUB_TOKEN")
         self.timeout = max(0.5, float(timeout))
         self.max_limit = max(1, min(int(max_limit), 100))
+        self.max_pages = max(1, min(int(max_pages), 20))
+        self.cache = cache
         self._opener = opener or urlopen
 
-    def _request_json(self, url: str, *, limit: int) -> tuple[list[dict[str, Any]], int | None, str | None, float]:
+    def _request_json(
+        self,
+        url: str,
+        *,
+        limit: int,
+        cache_key: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int | None, str | None, float, bool]:
+        conditional_headers = self.cache.request_headers(cache_key or url) if self.cache else {}
         request = Request(
             url,
             headers={
                 "Accept": "application/vnd.github+json",
                 "User-Agent": "signal-radar/0.1",
+                **conditional_headers,
                 **({"Authorization": f"Bearer {self.token}"} if self.token else {}),
             },
         )
@@ -162,15 +185,70 @@ class GitHubSourceAdapter:
         try:
             with self._opener(request, timeout=self.timeout) as response:
                 status_code = getattr(response, "status", None) or response.getcode()
-                payload = json.loads(response.read().decode("utf-8"))
+                if status_code == 304:
+                    return [], status_code, None, _latency(started), True
+                raw = response.read()
+                if not isinstance(raw, (bytes, bytearray)):
+                    raw = str(raw).encode("utf-8", errors="replace")
+                if self.cache:
+                    headers = getattr(response, "headers", None)
+                    cache_hit = not self.cache.save_response(
+                        cache_key or url,
+                        bytes(raw),
+                        etag=headers.get("ETag") if headers is not None else None,
+                        last_modified=headers.get("Last-Modified") if headers is not None else None,
+                    )
+                else:
+                    cache_hit = False
+                payload = json.loads(bytes(raw).decode("utf-8"))
             if not isinstance(payload, list):
-                return [], status_code, "GitHub API returned a non-list payload", _latency(started)
-            return payload[:limit], status_code, None, _latency(started)
+                return [], status_code, "GitHub API returned a non-list payload", _latency(started), False
+            return payload[:limit], status_code, None, _latency(started), cache_hit
         except HTTPError as exc:
             detail = _error_detail(exc)
-            return [], exc.code, detail, _latency(started)
+            return [], exc.code, detail, _latency(started), False
         except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-            return [], None, str(exc), _latency(started)
+            return [], None, str(exc), _latency(started), False
+
+    def _request_pages(
+        self,
+        url: str,
+        *,
+        limit: int,
+        cache_prefix: str,
+        since: datetime | None = None,
+    ) -> tuple[list[dict[str, Any]], int | None, list[str], float, int, bool]:
+        items: list[dict[str, Any]] = []
+        errors: list[str] = []
+        status_codes: list[int] = []
+        latency = 0.0
+        pages = 0
+        cache_hits: list[bool] = []
+        for page in range(1, self.max_pages + 1):
+            separator = "&" if "?" in url else "?"
+            page_url = f"{url}{separator}page={page}"
+            page_items, status_code, error, page_latency, cache_hit = self._request_json(
+                page_url, limit=limit, cache_key=f"{cache_prefix}:page:{page}"
+            )
+            pages += 1
+            latency += page_latency
+            cache_hits.append(cache_hit)
+            if status_code is not None:
+                status_codes.append(status_code)
+            if error:
+                errors.append(error)
+                break
+            items.extend(page_items)
+            if cache_hit:
+                break
+            if len(page_items) < limit:
+                break
+            if since and page_items:
+                dates = [_parse_time(item.get("published_at") or item.get("updated_at") or item.get("created_at")) for item in page_items]
+                if all(value is not None and value < since for value in dates):
+                    break
+        status_code = next((code for code in status_codes if code in {401, 403, 404}), status_codes[0] if status_codes else None)
+        return items, status_code, errors, latency, pages, bool(cache_hits) and all(cache_hits)
 
     def collect(
         self,
@@ -198,17 +276,23 @@ class GitHubSourceAdapter:
             since = since.replace(tzinfo=timezone.utc)
         bounded_limit = max(1, min(int(limit), self.max_limit))
         endpoint = f"{self.base_url}/repos/{quote(owner)}/{quote(name)}"
-        releases, release_code, release_error, release_latency = self._request_json(
-            f"{endpoint}/releases?per_page={bounded_limit}", limit=bounded_limit
+        releases, release_code, release_errors, release_latency, release_pages, release_cache_hit = self._request_pages(
+            f"{endpoint}/releases?per_page={bounded_limit}",
+            limit=bounded_limit,
+            cache_prefix=f"github:{owner}/{name}:releases",
+            since=since,
         )
         issue_query = f"state=all&sort=updated&direction=desc&per_page={bounded_limit}"
         if since:
             since_value = since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
             issue_query += f"&since={quote(since_value, safe='')}"
-        issues, issue_code, issue_error, issue_latency = self._request_json(
-            f"{endpoint}/issues?{issue_query}", limit=bounded_limit
+        issues, issue_code, issue_errors, issue_latency, issue_pages, issue_cache_hit = self._request_pages(
+            f"{endpoint}/issues?{issue_query}",
+            limit=bounded_limit,
+            cache_prefix=f"github:{owner}/{name}:issues:{_cache_time_key(since)}",
+            since=since,
         )
-        errors = [error for error in (release_error, issue_error) if error]
+        errors = [error for error in [*release_errors, *issue_errors] if error]
         status_codes = [code for code in (release_code, issue_code) if code is not None]
         # 若两个请求结果不同，优先保留登录/限流/不存在状态，避免部分失败被隐藏。
         status_code = next(
@@ -220,10 +304,17 @@ class GitHubSourceAdapter:
         evidence: list[Evidence] = []
         claims: list[Claim] = []
         events: list[Event] = []
+        duplicate_records = 0
+        total_candidates = 0
+        cache_key = f"github:{owner}/{name}"
 
         for item in releases:
             article, ev, claim, event = self._release_record(item, since=since)
             if article:
+                total_candidates += 1
+                if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
+                    duplicate_records += 1
+                    continue
                 articles.append(article)
                 evidence.append(ev)
                 claims.append(claim)
@@ -234,6 +325,10 @@ class GitHubSourceAdapter:
                 continue
             article, ev, claim, event = self._issue_record(item, since=since)
             if article:
+                total_candidates += 1
+                if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
+                    duplicate_records += 1
+                    continue
                 articles.append(article)
                 evidence.append(ev)
                 claims.append(claim)
@@ -253,6 +348,11 @@ class GitHubSourceAdapter:
                 error="; ".join(errors)[:500] if errors else None,
                 latency_ms=round(release_latency + issue_latency, 1),
                 authenticated=bool(self.token),
+                pages=release_pages + issue_pages,
+                cache_hit=release_cache_hit and issue_cache_hit if self.cache else False,
+                new_records=len(articles),
+                duplicate_records=duplicate_records,
+                total_candidates=total_candidates,
             ),
             articles=articles,
             claims=claims,
@@ -534,6 +634,7 @@ class RSSSourceAdapter:
         max_limit: int = 50,
         max_bytes: int = 2_000_000,
         max_feeds: int = 20,
+        cache: SourceCache | None = None,
         opener: JsonOpener | None = None,
     ) -> None:
         configured = feed_urls if feed_urls is not None else feeds
@@ -544,6 +645,7 @@ class RSSSourceAdapter:
         self.max_limit = max(1, min(int(max_limit), 200))
         self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
         self.max_feeds = max(1, min(int(max_feeds), 50))
+        self.cache = cache
         self._opener = opener or urlopen
 
     @staticmethod
@@ -583,12 +685,15 @@ class RSSSourceAdapter:
             headers={
                 "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
                 "User-Agent": "signal-radar/0.1 (+https://github.com/RubiumOnly/ai-open-source-signal-radar)",
+                **(self.cache.request_headers(f"rss:{feed_url}") if self.cache else {}),
             },
         )
         try:
             with self._opener(request, timeout=self.timeout) as response:
                 getcode = getattr(response, "getcode", None)
                 status_code = getattr(response, "status", None) or (getcode() if callable(getcode) else None)
+                if status_code == 304:
+                    return _FeedFetch(status_code=status_code, cache_hit=True)
                 try:
                     raw = response.read(self.max_bytes + 1)
                 except TypeError:
@@ -601,8 +706,18 @@ class RSSSourceAdapter:
                 raw = str(raw).encode("utf-8", errors="replace")
             if len(raw) > self.max_bytes:
                 return _FeedFetch(status_code=status_code, error="response_too_large")
+            cache_hit = False
+            if self.cache:
+                headers = getattr(response, "headers", None)
+                cache_hit = not self.cache.save_response(
+                    f"rss:{feed_url}",
+                    bytes(raw),
+                    etag=headers.get("ETag") if headers is not None else None,
+                    last_modified=headers.get("Last-Modified") if headers is not None else None,
+                )
             parsed = _parse_feed_document(bytes(raw), feed_url)
             parsed.status_code = status_code
+            parsed.cache_hit = cache_hit
             return parsed
         except HTTPError as exc:
             return _FeedFetch(status_code=exc.code, error=_error_detail(exc))
@@ -669,6 +784,8 @@ class RSSSourceAdapter:
         evidence: list[Evidence] = []
         claims: list[Claim] = []
         events: list[Event] = []
+        duplicate_records = 0
+        total_candidates = 0
         for feed_url, feed, entry in all_entries:
             body = (entry.content or entry.summary or entry.title).strip()
             entry_key = (
@@ -698,6 +815,12 @@ class RSSSourceAdapter:
                 tags=["official", "feed"],
                 metadata={"collector": "rss", "feed_url": feed_url, "format": feed.format},
             )
+            total_candidates += 1
+            if self.cache and not self.cache.register_record(
+                f"rss:{feed_url}", article.id, article.content_hash or ""
+            ):
+                duplicate_records += 1
+                continue
             stance, sentiment, category = _classify_feedback(f"{entry.title}\n{body}")
             # 官方公告通常是中性信息，只有标题或正文明确提到故障/修复时才提高风险。
             risk_score = 64.0 if sentiment == "negative" else 18.0 if sentiment == "positive" else 12.0
@@ -753,6 +876,7 @@ class RSSSourceAdapter:
 
         status_name = "ok"
         access_name = "public"
+        successful_fetches = [result for _, result in fetched if not result.error]
         if failures and successes:
             status_name = "partial"
         elif failures and not successes:
@@ -779,6 +903,11 @@ class RSSSourceAdapter:
                 error="; ".join(failures)[:500] if failures else None,
                 latency_ms=_latency(started),
                 authenticated=False,
+                pages=len(fetched),
+                cache_hit=bool(successful_fetches) and all(result.cache_hit for result in successful_fetches),
+                new_records=len(articles),
+                duplicate_records=duplicate_records,
+                total_candidates=total_candidates,
             ),
             articles=articles,
             claims=claims,
@@ -812,11 +941,15 @@ class HackerNewsSourceAdapter:
         timeout: float = 8.0,
         max_limit: int = 50,
         max_bytes: int = 2_000_000,
+        max_pages: int = 4,
+        cache: SourceCache | None = None,
         opener: JsonOpener | None = None,
     ) -> None:
         self.timeout = max(0.5, float(timeout))
         self.max_limit = max(1, min(int(max_limit), 100))
         self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
+        self.max_pages = max(1, min(int(max_pages), 20))
+        self.cache = cache
         self._opener = opener or urlopen
 
     @staticmethod
@@ -827,12 +960,19 @@ class HackerNewsSourceAdapter:
         # Algolia 查询较短且可审计；控制长度也避免意外把整段 prompt 当查询。
         return value[:160]
 
-    def _fetch(self, query: str, *, limit: int, since: datetime | None) -> tuple[list[dict[str, Any]], int | None, str | None, float]:
+    def _fetch(
+        self,
+        query: str,
+        *,
+        limit: int,
+        since: datetime | None,
+        page: int = 0,
+    ) -> tuple[list[dict[str, Any]], int | None, str | None, float, bool, int | None]:
         params: dict[str, str | int] = {
             "query": query,
             "tags": "story,comment",
             "hitsPerPage": limit,
-            "page": 0,
+            "page": page,
         }
         if since:
             params["numericFilters"] = f"created_at_i>={int(since.timestamp())}"
@@ -841,31 +981,48 @@ class HackerNewsSourceAdapter:
             headers={
                 "Accept": "application/json",
                 "User-Agent": "signal-radar/0.1 (+https://github.com/RubiumOnly/ai-open-source-signal-radar)",
+                **(self.cache.request_headers(f"hackernews:{query}:{_cache_time_key(since)}:page:{page}") if self.cache else {}),
             },
         )
         started = time.perf_counter()
         try:
             with self._opener(request, timeout=self.timeout) as response:
                 status_code = getattr(response, "status", None) or response.getcode()
+                if status_code == 304:
+                    return [], status_code, None, _latency(started), True, None
                 try:
                     raw = response.read(self.max_bytes + 1)
                 except TypeError:
                     raw = response.read()
             if status_code is not None and status_code >= 400:
-                return [], status_code, f"http_{status_code}", _latency(started)
+                return [], status_code, f"http_{status_code}", _latency(started), False, None
             if not isinstance(raw, (bytes, bytearray)):
                 raw = str(raw).encode("utf-8", errors="replace")
             if len(raw) > self.max_bytes:
-                return [], status_code, "response_too_large", _latency(started)
+                return [], status_code, "response_too_large", _latency(started), False, None
             payload = json.loads(bytes(raw).decode("utf-8"))
             hits = payload.get("hits") if isinstance(payload, dict) else None
             if not isinstance(hits, list):
-                return [], status_code, "invalid_payload", _latency(started)
-            return [item for item in hits[:limit] if isinstance(item, dict)], status_code, None, _latency(started)
+                return [], status_code, "invalid_payload", _latency(started), False, None
+            cache_hit = False
+            if self.cache:
+                headers = getattr(response, "headers", None)
+                cache_hit = not self.cache.save_response(
+                    f"hackernews:{query}:{_cache_time_key(since)}:page:{page}",
+                    bytes(raw),
+                    etag=headers.get("ETag") if headers is not None else None,
+                    last_modified=headers.get("Last-Modified") if headers is not None else None,
+                )
+            nb_pages = payload.get("nbPages") if isinstance(payload, dict) else None
+            try:
+                nb_pages = int(nb_pages) if nb_pages is not None else None
+            except (TypeError, ValueError):
+                nb_pages = None
+            return [item for item in hits[:limit] if isinstance(item, dict)], status_code, None, _latency(started), cache_hit, nb_pages
         except HTTPError as exc:
-            return [], exc.code, _error_detail(exc), _latency(started)
+            return [], exc.code, _error_detail(exc), _latency(started), False, None
         except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-            return [], None, str(exc)[:240] or exc.__class__.__name__, _latency(started)
+            return [], None, str(exc)[:240] or exc.__class__.__name__, _latency(started), False, None
 
     def collect(
         self,
@@ -893,7 +1050,32 @@ class HackerNewsSourceAdapter:
             since = _parse_time(since)
         if since and since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
-        hits, status_code, error, latency = self._fetch(normalised, limit=bounded_limit, since=since)
+        hits: list[dict[str, Any]] = []
+        status_code: int | None = None
+        error: str | None = None
+        latency = 0.0
+        pages = 0
+        cache_hits: list[bool] = []
+        for page in range(self.max_pages):
+            page_hits, page_status, page_error, page_latency, cache_hit, nb_pages = self._fetch(
+                normalised, limit=bounded_limit, since=since, page=page
+            )
+            pages += 1
+            latency += page_latency
+            cache_hits.append(cache_hit)
+            status_code = page_status
+            error = page_error
+            if error:
+                break
+            hits.extend(page_hits)
+            if cache_hit:
+                break
+            if len(page_hits) < bounded_limit or (nb_pages is not None and page + 1 >= nb_pages):
+                break
+            if since and page_hits:
+                dates = [_parse_time(item.get("created_at")) for item in page_hits]
+                if all(value is not None and value < since for value in dates):
+                    break
         if error:
             status_name, access_name = (
                 ("rate_limited", "rate_limited") if status_code == 429 else
@@ -916,6 +1098,9 @@ class HackerNewsSourceAdapter:
         evidence: list[Evidence] = []
         claims: list[Claim] = []
         events: list[Event] = []
+        duplicate_records = 0
+        total_candidates = 0
+        cache_key = f"hackernews:{normalised}:{_cache_time_key(since)}"
         for hit in hits:
             published = _parse_time(hit.get("created_at"))
             if since and published and published < since:
@@ -952,6 +1137,10 @@ class HackerNewsSourceAdapter:
                     "num_comments": hit.get("num_comments"),
                 },
             )
+            total_candidates += 1
+            if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
+                duplicate_records += 1
+                continue
             stance, sentiment, category = _classify_feedback(text)
             risk_score = 64.0 if sentiment == "negative" else 18.0 if sentiment == "positive" else 28.0
             evidence_id = f"ev-{article_id.removeprefix('hackernews-')}"
@@ -1014,6 +1203,11 @@ class HackerNewsSourceAdapter:
                 records=len(articles),
                 detail=f"{len(articles)} records for query={normalised!r}",
                 latency_ms=latency,
+                pages=pages,
+                cache_hit=bool(cache_hits) and all(cache_hits) if self.cache else False,
+                new_records=len(articles),
+                duplicate_records=duplicate_records,
+                total_candidates=total_candidates,
             ),
             articles=articles,
             claims=claims,
@@ -1035,11 +1229,15 @@ class RedditSourceAdapter:
         timeout: float = 8.0,
         max_limit: int = 50,
         max_bytes: int = 2_000_000,
+        max_pages: int = 4,
+        cache: SourceCache | None = None,
         opener: JsonOpener | None = None,
     ) -> None:
         self.timeout = max(0.5, float(timeout))
         self.max_limit = max(1, min(int(max_limit), 100))
         self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
+        self.max_pages = max(1, min(int(max_pages), 20))
+        self.cache = cache
         self._opener = opener or urlopen
 
     def collect(
@@ -1066,63 +1264,89 @@ class RedditSourceAdapter:
             since = _parse_time(since)
         if since and since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
-        params = urlencode({"q": query, "sort": "new", "t": "all", "limit": bounded_limit, "raw_json": 1})
-        request = Request(
-            f"{self.base_url}?{params}",
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "signal-radar/0.2 (public community research)",
-            },
-        )
         started = time.perf_counter()
-        try:
-            with self._opener(request, timeout=self.timeout) as response:
-                status_code = getattr(response, "status", None) or response.getcode()
-                try:
-                    raw = response.read(self.max_bytes + 1)
-                except TypeError:
-                    raw = response.read()
-            if status_code is not None and status_code >= 400:
-                status = "rate_limited" if status_code == 429 else "blocked" if status_code in {403, 429} else "error"
-                access = "rate_limited" if status_code == 429 else "blocked" if status_code == 403 else "error"
-                return SourceFetchResult(
-                    status=SourceStatus(
-                        source="Reddit",
-                        source_type="community",
-                        status=status,  # type: ignore[arg-type]
-                        access_status=access,  # type: ignore[arg-type]
-                        detail=f"HTTP {status_code}",
-                        error=f"http_{status_code}",
-                        latency_ms=_latency(started),
+        children: list[dict[str, Any]] = []
+        after: str | None = None
+        pages = 0
+        cache_hits: list[bool] = []
+        for page in range(self.max_pages):
+            query_params: dict[str, Any] = {
+                "q": query,
+                "sort": "new",
+                "t": "all",
+                "limit": bounded_limit,
+                "raw_json": 1,
+            }
+            if after:
+                query_params["after"] = after
+            request_url = f"{self.base_url}?{urlencode(query_params)}"
+            request = Request(
+                request_url,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "signal-radar/0.2 (public community research)",
+                    **(self.cache.request_headers(f"reddit:{query}:{_cache_time_key(since)}:page:{page}") if self.cache else {}),
+                },
+            )
+            try:
+                with self._opener(request, timeout=self.timeout) as response:
+                    status_code = getattr(response, "status", None) or response.getcode()
+                    if status_code == 304:
+                        cache_hits.append(True)
+                        pages += 1
+                        break
+                    try:
+                        raw = response.read(self.max_bytes + 1)
+                    except TypeError:
+                        raw = response.read()
+                    response_headers = getattr(response, "headers", None)
+                if status_code is not None and status_code >= 400:
+                    status = "rate_limited" if status_code == 429 else "blocked" if status_code == 403 else "error"
+                    access = "rate_limited" if status_code == 429 else "blocked" if status_code == 403 else "error"
+                    return SourceFetchResult(status=SourceStatus(
+                        source="Reddit", source_type="community", status=status, access_status=access,
+                        detail=f"HTTP {status_code}", error=f"http_{status_code}", latency_ms=_latency(started), pages=pages + 1,
+                    ))
+                if not isinstance(raw, (bytes, bytearray)):
+                    raw = str(raw).encode("utf-8", errors="replace")
+                if len(raw) > self.max_bytes:
+                    raise ValueError("response_too_large")
+                cache_hit = False
+                if self.cache:
+                    cache_hit = not self.cache.save_response(
+                        f"reddit:{query}:{_cache_time_key(since)}:page:{page}",
+                        bytes(raw),
+                        etag=response_headers.get("ETag") if response_headers is not None else None,
+                        last_modified=response_headers.get("Last-Modified") if response_headers is not None else None,
                     )
-                )
-            if not isinstance(raw, (bytes, bytearray)):
-                raw = str(raw).encode("utf-8", errors="replace")
-            if len(raw) > self.max_bytes:
-                raise ValueError("response_too_large")
-            payload = json.loads(bytes(raw).decode("utf-8"))
-            children = (((payload or {}).get("data") or {}).get("children") or []) if isinstance(payload, dict) else []
-            if not isinstance(children, list):
-                raise ValueError("invalid_payload")
-        except HTTPError as exc:
-            return SourceFetchResult(
-                status=SourceStatus(
+                payload = json.loads(bytes(raw).decode("utf-8"))
+                page_children = (((payload or {}).get("data") or {}).get("children") or []) if isinstance(payload, dict) else []
+                if not isinstance(page_children, list):
+                    raise ValueError("invalid_payload")
+                pages += 1
+                cache_hits.append(cache_hit)
+                children.extend(item for item in page_children if isinstance(item, dict))
+                after = str(((payload.get("data") or {}).get("after") or "")).strip() if isinstance(payload, dict) else ""
+                if cache_hit or not after or len(page_children) < bounded_limit:
+                    break
+            except HTTPError as exc:
+                return SourceFetchResult(status=SourceStatus(
                     source="Reddit", source_type="community", status="error", access_status="error",
-                    detail=f"HTTP {exc.code}", error=f"http_{exc.code}", latency_ms=_latency(started)
-                )
-            )
-        except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-            return SourceFetchResult(
-                status=SourceStatus(
+                    detail=f"HTTP {exc.code}", error=f"http_{exc.code}", latency_ms=_latency(started), pages=pages + 1,
+                ))
+            except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+                return SourceFetchResult(status=SourceStatus(
                     source="Reddit", source_type="community", status="error", access_status="error",
-                    detail="Reddit response could not be read", error=str(exc)[:240], latency_ms=_latency(started)
-                )
-            )
+                    detail="Reddit response could not be read", error=str(exc)[:240], latency_ms=_latency(started), pages=pages + 1,
+                ))
 
         articles: list[Article] = []
         evidence: list[Evidence] = []
         claims: list[Claim] = []
         events: list[Event] = []
+        duplicate_records = 0
+        total_candidates = 0
+        cache_key = f"reddit:{query}:{_cache_time_key(since)}"
         for child in children:
             item = child.get("data") if isinstance(child, dict) else None
             if not isinstance(item, dict):
@@ -1161,6 +1385,10 @@ class RedditSourceAdapter:
                 tags=["community", "reddit", str(item.get("subreddit") or "unknown")],
                 metadata={"collector": "reddit_public_json", "query": query, "score": item.get("score")},
             )
+            total_candidates += 1
+            if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
+                duplicate_records += 1
+                continue
             stance, sentiment, category = _classify_feedback(text_value)
             risk_score = 64.0 if sentiment == "negative" else 18.0 if sentiment == "positive" else 28.0
             evidence_id = f"ev-{article_id.removeprefix('reddit-')}"
@@ -1190,7 +1418,9 @@ class RedditSourceAdapter:
         return SourceFetchResult(
             status=SourceStatus(
                 source="Reddit", source_type="community", status="ok", access_status="public",
-                records=len(articles), detail=f"{len(articles)} records for query={query!r}", latency_ms=_latency(started)
+                records=len(articles), detail=f"{len(articles)} records for query={query!r}", latency_ms=_latency(started),
+                pages=pages, cache_hit=bool(cache_hits) and all(cache_hits) if self.cache else False,
+                new_records=len(articles), duplicate_records=duplicate_records, total_candidates=total_candidates,
             ), articles=articles, claims=claims, events=events, evidence=evidence,
         )
 

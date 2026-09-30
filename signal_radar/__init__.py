@@ -24,6 +24,7 @@ from .models import (
     SourceStatus,
 )
 from .history import HistoryStore, RunHistoryStore, SQLiteHistoryStore, report_to_markdown
+from .cache import CacheDelta, DEFAULT_CACHE_PATH, SourceCache
 from .scheduler import LocalScheduler, SchedulerAlreadyRunning, scheduler_request_from_env, validate_scheduler_request
 from .planner import build_plan
 from .sources import (
@@ -85,6 +86,9 @@ __all__ = [
     "SQLiteHistoryStore",
     "RunHistoryStore",
     "report_to_markdown",
+    "CacheDelta",
+    "DEFAULT_CACHE_PATH",
+    "SourceCache",
     "LocalScheduler",
     "SchedulerAlreadyRunning",
     "scheduler_request_from_env",

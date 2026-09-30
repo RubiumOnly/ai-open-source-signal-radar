@@ -38,6 +38,11 @@ export interface RunEvent {
   status?: string | null
   records?: number
   latency_ms?: number | null
+  pages?: number
+  cache_hit?: boolean
+  new_records?: number
+  duplicate_records?: number
+  total_candidates?: number
   message?: string
   created_at: string
 }
@@ -52,6 +57,12 @@ export interface SourceStatus {
   error?: string | null
   latency_ms?: number | null
   authenticated?: boolean
+  pages?: number
+  cache_hit?: boolean
+  new_records?: number
+  duplicate_records?: number
+  total_candidates?: number
+  next_cursor?: string | null
 }
 
 export interface Evidence {
@@ -106,6 +117,23 @@ export interface Report {
 export interface RunResponse {
   run: Run
   report?: Report | null
+}
+
+export interface MetricsSnapshot {
+  source_count: number
+  latency_ms: { avg?: number | null; p95?: number | null; max?: number | null }
+  pages: number
+  new_records: number
+  duplicate_records: number
+  total_candidates: number
+  duplicate_rate_pct?: number | null
+  cache_hit_pct?: number | null
+}
+
+export interface MetricsResponse {
+  current: MetricsSnapshot
+  history: MetricsSnapshot
+  runs: number
 }
 
 export interface Run {
