@@ -475,6 +475,9 @@ Invoke-RestMethod http://localhost:8000/api/schedule -Method Post -ContentType "
 Invoke-RestMethod http://localhost:8000/api/schedule/stop -Method Post
 ```
 
+如果服务设置了 `SIGNAL_RADAR_API_TOKEN`，上面的调度状态、启动和停止请求也必须携带
+`Authorization: Bearer <token>`，与运行历史和取消接口保持一致；本地未配置 Token 时无需额外请求头。
+
 调度请求只接受内置来源名称（`github`、`github_prs`、`github_discussions`、`github_pr_comments`、`stackoverflow`、`rss`、`hackernews`、`browser_use`
 及其只读别名），最多 4 个来源和 20 个 URL/feed，间隔限制在 1 秒到 24 小时，
 单个计划最多 1000 次运行。调度线程是 daemon 线程；停止服务或调用 stop 后，

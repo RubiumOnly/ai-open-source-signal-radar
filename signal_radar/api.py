@@ -959,11 +959,11 @@ def create_app(
     scheduler = LocalScheduler(execute, cancel_callback=_cancel_for_scheduler)
     service.state.scheduler = scheduler
 
-    @service.get("/api/schedule", response_model=SchedulerState)
+    @service.get("/api/schedule", response_model=SchedulerState, dependencies=[Depends(require_api_token)])
     def schedule_state() -> SchedulerState:
         return scheduler.snapshot()
 
-    @service.post("/api/schedule", response_model=SchedulerState, status_code=202)
+    @service.post("/api/schedule", response_model=SchedulerState, status_code=202, dependencies=[Depends(require_api_token)])
     def schedule_start(payload: SchedulerRequest | None = Body(default=None)) -> SchedulerState:
         """显式启动本地有界调度；默认不会自动启动。"""
 
@@ -974,11 +974,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    @service.post("/api/schedule/stop", response_model=SchedulerState, status_code=202)
+    @service.post("/api/schedule/stop", response_model=SchedulerState, status_code=202, dependencies=[Depends(require_api_token)])
     def schedule_stop() -> SchedulerState:
         return scheduler.stop()
 
-    @service.delete("/api/schedule", response_model=SchedulerState, status_code=202)
+    @service.delete("/api/schedule", response_model=SchedulerState, status_code=202, dependencies=[Depends(require_api_token)])
     def schedule_delete() -> SchedulerState:
         return scheduler.stop()
 

@@ -85,6 +85,33 @@ class ReplayEndpointSecurityTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 401)
 
+    def test_configured_token_protects_scheduler_state_and_controls(self) -> None:
+        store = HistoryStore(":memory:")
+        app = create_app(api_token="test-token", history_store=store)
+        self.addCleanup(store.close)
+        client = TestClient(app)
+
+        for method, path in (("get", "/api/schedule"), ("post", "/api/schedule"), ("post", "/api/schedule/stop"), ("delete", "/api/schedule")):
+            response = getattr(client, method)(path)
+            self.assertEqual(response.status_code, 401, (method, path, response.text))
+
+        headers = {"Authorization": "Bearer test-token"}
+        state = client.get("/api/schedule", headers=headers)
+        self.assertEqual(state.status_code, 200)
+        started = client.post(
+            "/api/schedule",
+            headers=headers,
+            json={
+                "request": {"mode": "replay"},
+                "interval_seconds": 86400,
+                "max_runs": 1,
+                "run_immediately": False,
+            },
+        )
+        self.assertEqual(started.status_code, 202)
+        stopped = client.post("/api/schedule/stop", headers=headers)
+        self.assertEqual(stopped.status_code, 202)
+
     def test_environment_token_enables_authentication(self) -> None:
         store = HistoryStore(":memory:")
         self.addCleanup(store.close)
