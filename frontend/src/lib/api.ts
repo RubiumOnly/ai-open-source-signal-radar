@@ -1,4 +1,4 @@
-import type { CapabilitiesResponse, FollowUpRequest, MetricsResponse, PlanResponse, Report, ResearchPlan, Run, RunEvent, RunResponse, RunMode, ResearchMode } from '../types'
+import type { CapabilitiesResponse, FollowUpRequest, MetricsResponse, PlanResponse, Report, ResearchPlan, Run, RunEvent, RunResponse, RunMode, ResearchMode, SchedulerRequest, SchedulerState } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -103,6 +103,22 @@ export function fetchMetrics(): Promise<MetricsResponse> {
 
 export function fetchCapabilities(): Promise<CapabilitiesResponse> {
   return request<CapabilitiesResponse>('/api/capabilities')
+}
+
+export function fetchSchedule(): Promise<SchedulerState> {
+  return request<SchedulerState>('/api/schedule')
+}
+
+export function startSchedule(payload: SchedulerRequest): Promise<SchedulerState> {
+  return request<SchedulerState>('/api/schedule', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function stopSchedule(): Promise<SchedulerState> {
+  return request<SchedulerState>('/api/schedule/stop', { method: 'POST' })
 }
 
 export async function fetchMarkdown(runId: string): Promise<string> {

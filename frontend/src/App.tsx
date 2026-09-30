@@ -28,11 +28,12 @@ import {
   SlidersHorizontal,
   Sparkles,
   Send,
+  StopCircle,
   TerminalSquare,
   XCircle,
 } from 'lucide-react'
-import type { CapabilitiesResponse, Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SourceStatus } from './types'
-import { cancelRun, createPlan, fetchCapabilities, fetchMarkdown, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchTrace, followUp, startRun, streamRun } from './lib/api'
+import type { CapabilitiesResponse, Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SchedulerRequest, SchedulerState, SourceStatus } from './types'
+import { cancelRun, createPlan, fetchCapabilities, fetchMarkdown, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchSchedule, fetchTrace, followUp, startRun, startSchedule, stopSchedule, streamRun } from './lib/api'
 
 const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变化、安装兼容性和社区反馈'
 
@@ -91,6 +92,16 @@ const eventTypeLabels: Record<string, string> = {
   failed: '运行失败',
 }
 
+const schedulerStatusLabels: Record<string, string> = {
+  disabled: '未启用',
+  scheduled: '等待下一次运行',
+  running: '正在运行',
+  stopping: '正在停止',
+  stopped: '已停止',
+  completed: '已完成',
+  failed: '运行失败',
+}
+
 const sentimentLabels: Record<string, string> = {
   positive: '正面',
   negative: '负面',
@@ -111,6 +122,12 @@ function formatTime(value?: string | null) {
   if (!value) return '—'
   const date = new Date(value)
   return Number.isNaN(date.valueOf()) ? '—' : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.valueOf()) ? '—' : date.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 function sourceName(source: string) {
@@ -171,6 +188,13 @@ function App() {
   const [selectingRunId, setSelectingRunId] = useState<string | null>(null)
   const [historyQuery, setHistoryQuery] = useState('')
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all')
+  const [schedule, setSchedule] = useState<SchedulerState | null>(null)
+  const [scheduleLoading, setScheduleLoading] = useState(false)
+  const [scheduleAction, setScheduleAction] = useState<'starting' | 'stopping' | null>(null)
+  const [scheduleError, setScheduleError] = useState('')
+  const [scheduleIntervalMinutes, setScheduleIntervalMinutes] = useState(60)
+  const [scheduleMaxRuns, setScheduleMaxRuns] = useState(3)
+  const [scheduleImmediate, setScheduleImmediate] = useState(false)
 
   useEffect(() => {
     let mounted = true
@@ -183,6 +207,7 @@ function App() {
     })
     fetchMetrics().then(setMetrics).catch(() => undefined)
     fetchCapabilities().then(setCapabilities).catch(() => undefined)
+    refreshSchedule()
     refreshHistory()
     return () => { mounted = false }
   }, [])
@@ -207,6 +232,15 @@ function App() {
     document.addEventListener('keydown', closeOnEscape)
     return () => document.removeEventListener('keydown', closeOnEscape)
   }, [showSettings])
+
+  useEffect(() => {
+    const active = ['scheduled', 'running', 'stopping'].includes(schedule?.status ?? '')
+    if (!showSettings || !active) return
+    const timer = window.setInterval(() => {
+      fetchSchedule().then(setSchedule).catch((cause) => setScheduleError(cause instanceof Error ? cause.message : '调度状态读取失败'))
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [schedule?.status, showSettings])
 
   const latestEvents = useMemo(() => [...events].slice(-7).reverse(), [events])
   const traceEvents = useMemo(() => {
@@ -246,6 +280,60 @@ function App() {
 
   async function refreshMetrics() {
     try { setMetrics(await fetchMetrics()) } catch { /* 指标接口不可用时不影响主报告 */ }
+  }
+
+  async function refreshSchedule() {
+    setScheduleLoading(true)
+    setScheduleError('')
+    try {
+      setSchedule(await fetchSchedule())
+    } catch (cause) {
+      setScheduleError(cause instanceof Error ? cause.message : '调度状态读取失败')
+    } finally {
+      setScheduleLoading(false)
+    }
+  }
+
+  async function startScheduledMonitoring() {
+    const nextPlan = plan ?? await makePlan()
+    if (!nextPlan) return
+    const payload: SchedulerRequest = {
+      request: {
+        mode: runMode,
+        query: nextPlan.query,
+        project: nextPlan.project,
+        window_days: nextPlan.window_days,
+        research_mode: nextPlan.research_mode,
+        focus: nextPlan.focus,
+        sources: selectedSources.length ? selectedSources : nextPlan.sources,
+        urls: nextPlan.urls,
+        limit: 20,
+      },
+      interval_seconds: Math.max(1, Math.round(scheduleIntervalMinutes * 60)),
+      max_runs: Math.max(1, Math.min(1000, Math.round(scheduleMaxRuns))),
+      run_immediately: scheduleImmediate,
+    }
+    setScheduleAction('starting')
+    setScheduleError('')
+    try {
+      setSchedule(await startSchedule(payload))
+    } catch (cause) {
+      setScheduleError(cause instanceof Error ? cause.message : '调度启动失败，请检查 API Token 和运行配置。')
+    } finally {
+      setScheduleAction(null)
+    }
+  }
+
+  async function stopScheduledMonitoring() {
+    setScheduleAction('stopping')
+    setScheduleError('')
+    try {
+      setSchedule(await stopSchedule())
+    } catch (cause) {
+      setScheduleError(cause instanceof Error ? cause.message : '调度停止失败，请检查 API Token。')
+    } finally {
+      setScheduleAction(null)
+    }
   }
 
   async function makePlan() {
@@ -683,6 +771,32 @@ function App() {
           <div><span>增量缓存</span><strong>{capabilities.cache_enabled ? '已启用' : '已关闭'}</strong></div>
           <div><span>API 认证</span><strong>{capabilities.api_auth_enabled ? '已启用' : '本地开放'}</strong></div>
         </div> : <div className="capability-loading"><LoaderCircle className="spin" size={16} /> 正在读取能力状态</div>}
+        <section className="schedule-control" aria-labelledby="schedule-title">
+          <div className="schedule-heading"><span id="schedule-title"><Clock3 size={15} /> 定时监控</span><button className="text-action" onClick={refreshSchedule} disabled={scheduleLoading}><RefreshCw size={13} /> 刷新状态</button></div>
+          <div className={`schedule-status schedule-status-${schedule?.status ?? 'disabled'}`} role="status" aria-live="polite">
+            <span className="schedule-status-dot" />
+            <strong>{schedule ? schedulerStatusLabels[schedule.status] ?? schedule.status : scheduleLoading ? '正在读取状态' : '未读取状态'}</strong>
+            {schedule?.next_run_at && <span>下一次 {formatDateTime(schedule.next_run_at)}</span>}
+          </div>
+          <div className="schedule-fields">
+            <label><span>运行间隔（分钟）</span><input type="number" min="1" max="1440" step="1" value={scheduleIntervalMinutes} onChange={(event) => setScheduleIntervalMinutes(Number(event.target.value) || 1)} /></label>
+            <label><span>最多运行次数</span><input type="number" min="1" max="1000" step="1" value={scheduleMaxRuns} onChange={(event) => setScheduleMaxRuns(Number(event.target.value) || 1)} /></label>
+          </div>
+          <label className="schedule-check"><input type="checkbox" checked={scheduleImmediate} onChange={(event) => setScheduleImmediate(event.target.checked)} /><span>启动后立即运行一次</span></label>
+          <div className="schedule-meta">
+            <span>已启动 {schedule?.runs_started ?? 0} 次</span><span>已完成 {schedule?.runs_completed ?? 0} 次</span>
+          </div>
+          {(scheduleError || schedule?.last_error) && <div className="schedule-error" role="alert">{capabilities?.api_auth_enabled && !token ? '共享 API 已启用认证，请先填写 Bearer Token。' : scheduleError || schedule?.last_error}</div>}
+          <div className="schedule-actions">
+            <button className="primary-action" onClick={startScheduledMonitoring} disabled={scheduleAction !== null || ['scheduled', 'running', 'stopping'].includes(schedule?.status ?? '')} aria-busy={scheduleAction === 'starting'}>
+              {scheduleAction === 'starting' ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />} 启动监控
+            </button>
+            <button className="schedule-stop" onClick={stopScheduledMonitoring} disabled={scheduleAction !== null || !['scheduled', 'running', 'stopping'].includes(schedule?.status ?? '')} aria-busy={scheduleAction === 'stopping'}>
+              {scheduleAction === 'stopping' ? <LoaderCircle className="spin" size={15} /> : <StopCircle size={15} />} 停止
+            </button>
+          </div>
+          <p className="schedule-help">复用当前研究问题、来源和 Replay/Live 模式；每次运行都会写入历史。</p>
+        </section>
         <p>Token 不会写入代码或 URL。Replay 本地运行通常不需要填写。</p>
         </aside>
       </div>}

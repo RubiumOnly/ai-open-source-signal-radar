@@ -157,6 +157,43 @@ export interface CapabilitiesResponse {
   structured_sources: string[]
 }
 
+export type SchedulerStatus = 'disabled' | 'scheduled' | 'running' | 'stopping' | 'stopped' | 'completed' | 'failed'
+
+export interface SchedulerState {
+  enabled: boolean
+  status: SchedulerStatus
+  schedule_id?: string | null
+  interval_seconds?: number | null
+  max_runs?: number | null
+  run_immediately: boolean
+  runs_started: number
+  runs_completed: number
+  last_run_id?: string | null
+  last_run_status?: string | null
+  last_error?: string | null
+  started_at?: string | null
+  last_run_at?: string | null
+  next_run_at?: string | null
+  stopped_at?: string | null
+}
+
+export interface SchedulerRequest {
+  request: {
+    mode: RunMode
+    query?: string
+    project?: string
+    window_days?: number
+    research_mode?: ResearchMode
+    focus?: string[]
+    sources?: string[]
+    urls?: string[]
+    limit?: number
+  }
+  interval_seconds: number
+  max_runs: number
+  run_immediately: boolean
+}
+
 export interface Run {
   run_id: string
   mode: RunMode
