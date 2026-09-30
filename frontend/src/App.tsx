@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowUpRight,
+  BarChart3,
   BookOpen,
   Check,
   ChevronRight,
@@ -126,6 +127,8 @@ function App() {
     () => [...(report?.events ?? [])].sort((a, b) => b.risk_score - a.risk_score).slice(0, 5),
     [report],
   )
+  const topics = report?.topics ?? []
+  const trends = report?.trends ?? []
 
   async function refreshHistory() {
     setHistoryLoading(true)
@@ -266,6 +269,7 @@ function App() {
           <button className="nav-item nav-item-active" onClick={() => jumpTo('overview')}><LayoutDashboard size={17} /> 总览 <span className="nav-dot" /></button>
           <button className="nav-item" onClick={() => jumpTo('history')}><FileSearch size={17} /> 运行历史</button>
           <button className="nav-item" onClick={() => jumpTo('evidence')}><BookOpen size={17} /> 证据库</button>
+          <button className="nav-item" onClick={() => jumpTo('insights')}><BarChart3 size={17} /> 主题趋势</button>
           <span className="nav-caption nav-caption-spaced">系统</span>
           <button className="nav-item" onClick={() => jumpTo('workspace')}><ShieldCheck size={17} /> 来源与权限</button>
           <button className="nav-item" onClick={() => jumpTo('trace')}><TerminalSquare size={17} /> Trace 回放</button>
@@ -452,6 +456,23 @@ function App() {
           </div>
         </section>
 
+        <section className="insights-section" id="insights">
+          <div className="section-heading">
+            <div><span className="eyebrow">SIGNAL SHAPE</span><h2>主题与趋势</h2></div>
+            <span className="section-note">按报告中的证据聚合</span>
+          </div>
+          <div className="insights-grid">
+            <div className="insight-panel">
+              <div className="panel-heading"><span>主题分布</span><span className="panel-count">{topics.length} topics</span></div>
+              {topics.length ? topics.slice(0, 6).map((topic) => <TopicRow key={topic.name} topic={topic} maxCount={Math.max(...topics.map((item) => item.count), 1)} />) : <div className="empty-panel"><BarChart3 size={22} /><span>完成一次运行后，这里会显示主题集中度。</span></div>}
+            </div>
+            <div className="insight-panel">
+              <div className="panel-heading"><span>时间趋势</span><span className="panel-count">{trends.length} points</span></div>
+              {trends.length ? trends.slice(-7).map((trend) => <TrendRow key={trend.date} trend={trend} maxMentions={Math.max(...trends.map((item) => item.mentions), 1)} />) : <div className="empty-panel"><BarChart3 size={22} /><span>时间窗口内还没有足够记录形成趋势。</span></div>}
+            </div>
+          </div>
+        </section>
+
         <section className="evidence-section" id="evidence">
           <div className="section-heading">
             <div><span className="eyebrow eyebrow-accent">TRACEABLE SOURCES</span><h2>最近证据</h2></div>
@@ -506,6 +527,16 @@ function TraceRow({ event, index }: { event: RunEvent; index: number }) {
     event.cache_hit ? '缓存命中' : '',
   ].filter(Boolean).join(' · ')
   return <div className={`trace-row ${terminal ? 'trace-row-terminal' : ''}`}><span className="trace-index">{String(index + 1).padStart(2, '0')}</span><span className={`trace-node ${terminal ? 'trace-node-terminal' : ''}`} /> <div className="trace-main"><strong>{event.message || event.type}</strong><span>{metrics}</span></div><span className="trace-type">{event.type}</span><time>{formatTime(event.created_at)}</time></div>
+}
+
+function TopicRow({ topic, maxCount }: { topic: Report['topics'][number]; maxCount: number }) {
+  const width = `${Math.max(5, Math.round(topic.count / maxCount * 100))}%`
+  return <div className="insight-row"><div className="insight-row-heading"><strong>{topic.name}</strong><span>{topic.count} 条 · {topic.sentiment}</span></div><div className="insight-track"><span style={{ width }} /></div><small>风险 {Math.round(topic.risk_score)} / 100</small></div>
+}
+
+function TrendRow({ trend, maxMentions }: { trend: Report['trends'][number]; maxMentions: number }) {
+  const width = `${Math.max(5, Math.round(trend.mentions / maxMentions * 100))}%`
+  return <div className="insight-row"><div className="insight-row-heading"><strong>{formatDate(trend.date)}</strong><span>{trend.mentions} mentions</span></div><div className="insight-track trend-track"><span style={{ width }} /></div><small>风险 {Math.round(trend.risk_score)} / 100 · 正面 {trend.positive} · 负面 {trend.negative}</small></div>
 }
 
 function SourceRow({ source }: { source: SourceStatus }) {
