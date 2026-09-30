@@ -9,10 +9,12 @@ import {
   ChevronRight,
   Clock3,
   CircleDot,
+  Crosshair,
   Download,
   FileSearch,
   FolderGit2,
   Gauge,
+  Globe2,
   KeyRound,
   LayoutDashboard,
   ListFilter,
@@ -47,6 +49,7 @@ const sourceLabels: Record<string, string> = {
   stackoverflow: 'Stack Overflow',
   browser_use: '动态网页',
   official_blog: '官方博客',
+  csdn: 'CSDN',
 }
 
 const sourceTypeLabels: Record<string, string> = {
@@ -74,6 +77,16 @@ const focusFallback = ['版本变化', '社区反馈', '维护活跃度']
 type TraceFilter = 'all' | 'collect' | 'done'
 type SectionId = 'overview' | 'workspace' | 'trace' | 'history' | 'findings' | 'insights' | 'evidence'
 
+const sentimentLabels: Record<string, string> = {
+  positive: '正面',
+  negative: '负面',
+  mixed: '混合',
+  neutral: '中性',
+  supportive: '支持',
+  oppose: '反对',
+  uncertain: '待确认',
+}
+
 function formatDate(value?: string | null) {
   if (!value) return '暂无时间'
   const date = new Date(value)
@@ -92,6 +105,10 @@ function sourceName(source: string) {
 
 function sourceTypeName(sourceType: string) {
   return sourceTypeLabels[sourceType] ?? sourceType
+}
+
+function sentimentName(sentiment: string) {
+  return sentimentLabels[sentiment] ?? sentiment
 }
 
 function riskTone(level?: string) {
@@ -380,6 +397,7 @@ function App() {
           <button className={`nav-item ${activeSection === 'overview' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('overview')} aria-current={activeSection === 'overview' ? 'page' : undefined}><LayoutDashboard size={17} /> 总览 {activeSection === 'overview' && <span className="nav-dot" />}</button>
           <button className={`nav-item ${activeSection === 'history' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('history')} aria-current={activeSection === 'history' ? 'page' : undefined}><FileSearch size={17} /> 运行历史 {activeSection === 'history' && <span className="nav-dot" />}</button>
           <button className={`nav-item ${activeSection === 'evidence' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('evidence')} aria-current={activeSection === 'evidence' ? 'page' : undefined}><BookOpen size={17} /> 证据库 {activeSection === 'evidence' && <span className="nav-dot" />}</button>
+          <button className={`nav-item ${activeSection === 'findings' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('findings')} aria-current={activeSection === 'findings' ? 'page' : undefined}><Crosshair size={17} /> 风险信号 {activeSection === 'findings' && <span className="nav-dot" />}</button>
           <button className={`nav-item ${activeSection === 'insights' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('insights')} aria-current={activeSection === 'insights' ? 'page' : undefined}><BarChart3 size={17} /> 主题趋势 {activeSection === 'insights' && <span className="nav-dot" />}</button>
           <span className="nav-caption nav-caption-spaced">运行控制</span>
           <button className={`nav-item ${activeSection === 'workspace' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('workspace')} aria-current={activeSection === 'workspace' ? 'page' : undefined}><ShieldCheck size={17} /> 来源与权限 {activeSection === 'workspace' && <span className="nav-dot" />}</button>
@@ -424,10 +442,10 @@ function App() {
           </div>
           <div className="brief-grid">
             <div className="brief-composer">
-              <div className="composer-label"><Sparkles size={15} /> 研究问题</div>
-              <textarea value={query} onChange={(event) => { setQuery(event.target.value); setPlan(null); setSelectedSources([]) }} placeholder="例如：分析某个项目最近 30 天的安装问题和社区反馈" />
+              <label className="composer-label" htmlFor="research-query"><Sparkles size={15} /> <span>研究问题</span></label>
+              <textarea id="research-query" aria-describedby="research-query-hint" value={query} onChange={(event) => { setQuery(event.target.value); setPlan(null); setSelectedSources([]) }} placeholder="例如：分析某个项目最近 30 天的安装问题和社区反馈" />
               <div className="composer-bottom">
-                <div className="composer-hint"><Search size={14} /> 计划解析不会访问网络</div>
+                <div className="composer-hint" id="research-query-hint"><Search size={14} /> 计划解析不会访问网络</div>
                 <button className="secondary-action" onClick={makePlan} disabled={running}>解析计划 <ChevronRight size={15} /></button>
               </div>
               <div className="prompt-row">
@@ -532,9 +550,10 @@ function App() {
               )}
             </div>
           </div>
+          {report && <AccessBoundary report={report} />}
           <div className="followup-bar">
             <div className="followup-icon"><MessageCircle size={17} /></div>
-            <input value={followUpQuery} onChange={(event) => setFollowUpQuery(event.target.value)} placeholder="对当前运行提出一个限定范围的核验或补查问题" disabled={running} />
+            <input aria-label="补查问题" value={followUpQuery} onChange={(event) => setFollowUpQuery(event.target.value)} placeholder="对当前运行提出一个限定范围的核验或补查问题" disabled={running} />
             <button className="followup-action" onClick={runFollowUp} disabled={running || !activeRunId}><Send size={15} /> 补查</button>
           </div>
         </section>
@@ -571,7 +590,7 @@ function App() {
           </div>
         </section>
 
-        <section className="findings-section">
+        <section className="findings-section" id="findings">
           <div className="section-heading">
             <div><span className="eyebrow">风险信号</span><h2>关键风险信号</h2></div>
             <button className="text-action" onClick={() => jumpTo('evidence')}>查看完整报告 <ArrowUpRight size={15} /></button>
@@ -666,6 +685,28 @@ function TraceRow({ event, index }: { event: RunEvent; index: number }) {
   return <div className={`trace-row ${terminal ? 'trace-row-terminal' : ''}`}><span className="trace-index">{String(index + 1).padStart(2, '0')}</span><span className={`trace-node ${terminal ? 'trace-node-terminal' : ''}`} /> <div className="trace-main"><strong>{event.message || event.type}</strong><span>{metrics}</span></div><span className="trace-type">{event.type}</span><time>{formatTime(event.created_at)}</time></div>
 }
 
+function AccessBoundary({ report }: { report: Report }) {
+  const access = report.access_status ?? []
+  if (!access.length) return null
+  return <div className="access-boundary">
+    <div className="access-boundary-heading">
+      <span><Globe2 size={15} /> 来源访问边界</span>
+      <span>只读 · 不绕过授权</span>
+    </div>
+    <div className="access-grid">
+      {access.slice(0, 6).map((item) => {
+        const tone = statusTone(item.status)
+        const status = statusLabels[item.status] ?? item.status
+        return <div className={`access-item access-item-${tone}`} key={`${item.source}-${item.status}`}>
+          <span className="access-item-icon">{tone === 'ok' ? <Check size={13} /> : <ShieldCheck size={13} />}</span>
+          <div><strong>{sourceName(item.source)}</strong><span>{item.reason || status}</span></div>
+          <b>{status}</b>
+        </div>
+      })}
+    </div>
+  </div>
+}
+
 function TopicRow({ topic, maxCount }: { topic: Report['topics'][number]; maxCount: number }) {
   const width = `${Math.max(5, Math.round(topic.count / maxCount * 100))}%`
   return <div className="insight-row"><div className="insight-row-heading"><strong>{topic.name}</strong><span>{topic.count} 条 · {topic.sentiment}</span></div><div className="insight-track"><span style={{ width }} /></div><small>风险 {Math.round(topic.risk_score)} / 100</small></div>
@@ -700,7 +741,7 @@ function HistoryRow({ run, active, loading, onSelect }: { run: Run; active: bool
 }
 
 function FindingRow({ event }: { event: Event }) {
-  return <article className={`finding-row finding-${riskTone(event.risk_level)}`}><div className="finding-marker" /><div className="finding-main"><div className="finding-title"><strong>{event.title}</strong><span>{event.category}</span></div><p>{event.summary || '报告没有提供额外摘要。'}</p></div><div className="finding-score"><strong>{Math.round(event.risk_score)}</strong><span>/ 100</span><small>{formatDate(event.occurred_at)}</small></div><ChevronRight size={17} className="finding-arrow" /></article>
+  return <article className={`finding-row finding-${riskTone(event.risk_level)}`}><div className="finding-marker" /><div className="finding-main"><div className="finding-title"><strong>{event.title}</strong><span>{event.category}</span><span className={`finding-sentiment finding-sentiment-${event.sentiment}`}>{sentimentName(event.sentiment)}</span></div><p>{event.summary || '报告没有提供额外摘要。'} <span className="finding-evidence-count">{event.evidence_ids.length} 条证据</span></p></div><div className="finding-score"><strong>{Math.round(event.risk_score)}</strong><span>/ 100</span><small>{formatDate(event.occurred_at)}</small></div><ChevronRight size={17} className="finding-arrow" /></article>
 }
 
 function EvidenceCard({ evidence }: { evidence: Report['evidence'][number] }) {
