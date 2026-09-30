@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=float, default=None, help="Live run timeout budget")
     parser.add_argument(
         "--source",
-        choices=("github", "github_prs", "rss", "official", "hackernews", "reddit", "community", "browser_use", "all"),
+        choices=("github", "github_prs", "github_discussions", "rss", "official", "hackernews", "reddit", "community", "browser_use", "all"),
         default="github",
     )
     parser.add_argument("--community-query", help="Hacker News query; defaults to the project name")

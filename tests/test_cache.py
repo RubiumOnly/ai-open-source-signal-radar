@@ -117,6 +117,30 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(result.articles[0].metadata["state"], "open")
         self.assertEqual(result.claims[0].claim_type, "pull_request")
 
+    def test_github_discussions_are_opt_in_and_traceable(self) -> None:
+        payload = [{
+            "id": 7,
+            "number": 7,
+            "html_url": "https://github.com/org/repo/discussions/7",
+            "title": "Setup feedback",
+            "body": "Installation fails on Windows.",
+            "updated_at": "2026-09-29T00:00:00Z",
+            "category": {"name": "Q&A"},
+        }]
+
+        def opener(request, timeout):
+            self.assertIn("/discussions?", request.full_url)
+            self.assertGreater(timeout, 0)
+            return _Response(payload)
+
+        result = GitHubSourceAdapter(opener=opener).collect_discussions(
+            "org/repo", limit=5, since=datetime(2026, 9, 1, tzinfo=timezone.utc)
+        )
+        self.assertEqual(result.status.source, "GitHub Discussions")
+        self.assertEqual(result.status.records, 1)
+        self.assertEqual(result.articles[0].metadata["category"], "Q&A")
+        self.assertEqual(result.claims[0].claim_type, "discussion")
+
 
 if __name__ == "__main__":
     unittest.main()

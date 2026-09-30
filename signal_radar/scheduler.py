@@ -26,6 +26,8 @@ _ALLOWED_SOURCES = {
     "github_prs",
     "github_pull_requests",
     "pull_requests",
+    "github_discussions",
+    "discussions",
     "rss",
     "feed",
     "official",

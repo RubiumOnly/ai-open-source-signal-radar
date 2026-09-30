@@ -25,6 +25,7 @@ _FOCUS_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 _SOURCE_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("github_discussions", ("github discussion", "github discussions", "github 讨论")),
     ("github_prs", ("pull request", "pull requests", "合并请求", "pr")),
     ("github", ("github", "issue", "issues", "discussion", "discussions", "pull request", "pr")),
     ("rss", ("rss", "atom", "博客", "blog", "官方")),

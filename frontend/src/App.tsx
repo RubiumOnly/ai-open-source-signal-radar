@@ -34,6 +34,7 @@ const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变�
 const sourceLabels: Record<string, string> = {
   github: 'GitHub',
   github_prs: 'GitHub PR',
+  github_discussions: 'GitHub Discussions',
   rss: '官方 RSS',
   hackernews: 'Hacker News',
   reddit: 'Reddit',
