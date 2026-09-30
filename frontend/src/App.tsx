@@ -12,6 +12,7 @@ import {
   Gauge,
   KeyRound,
   LayoutDashboard,
+  ListFilter,
   LoaderCircle,
   MessageCircle,
   Play,
@@ -52,6 +53,7 @@ const statusLabels: Record<string, string> = {
 }
 
 const focusFallback = ['版本变化', '社区反馈', '维护活跃度']
+type TraceFilter = 'all' | 'collect' | 'done'
 
 function formatDate(value?: string | null) {
   if (!value) return '暂无时间'
@@ -102,6 +104,7 @@ function App() {
   const [runHistory, setRunHistory] = useState<Run[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
+  const [traceFilter, setTraceFilter] = useState<TraceFilter>('all')
 
   useEffect(() => {
     fetchReport().then(setReport).catch(() => setError('API 尚未启动，运行 Replay 后即可加载报告。'))
@@ -110,6 +113,11 @@ function App() {
   }, [])
 
   const latestEvents = useMemo(() => [...events].slice(-7).reverse(), [events])
+  const traceEvents = useMemo(() => {
+    if (traceFilter === 'collect') return events.filter((event) => event.stage === 'collect' || event.type === 'source_started' || event.type === 'source_completed')
+    if (traceFilter === 'done') return events.filter((event) => ['completed', 'partial', 'cancelled', 'failed'].includes(event.type))
+    return events
+  }, [events, traceFilter])
   const sources = report?.sources ?? []
   const criticalEvents = useMemo(
     () => [...(report?.events ?? [])].sort((a, b) => b.risk_score - a.risk_score).slice(0, 5),
@@ -242,7 +250,7 @@ function App() {
           <button className="nav-item" onClick={() => jumpTo('evidence')}><BookOpen size={17} /> 证据库</button>
           <span className="nav-caption nav-caption-spaced">系统</span>
           <button className="nav-item" onClick={() => jumpTo('workspace')}><ShieldCheck size={17} /> 来源与权限</button>
-          <button className="nav-item" onClick={() => jumpTo('workspace')}><TerminalSquare size={17} /> Trace 回放</button>
+          <button className="nav-item" onClick={() => jumpTo('trace')}><TerminalSquare size={17} /> Trace 回放</button>
         </nav>
 
         <div className="sidebar-footer">
@@ -355,7 +363,7 @@ function App() {
           <div className="section-heading">
             <div><span className="eyebrow eyebrow-accent">RUN MONITOR</span><h2>采集工作台</h2></div>
             <div className="workspace-actions">
-              {activeRunId && <button className="text-action" onClick={reloadTrace}><TerminalSquare size={14} /> 回放 Trace</button>}
+              {activeRunId && <button className="text-action" onClick={() => { reloadTrace(); jumpTo('trace') }}><TerminalSquare size={14} /> 回放 Trace</button>}
               {activeRunId && <span className="run-id">{activeRunId}</span>}
             </div>
           </div>
@@ -377,6 +385,26 @@ function App() {
             <div className="followup-icon"><MessageCircle size={17} /></div>
             <input value={followUpQuery} onChange={(event) => setFollowUpQuery(event.target.value)} placeholder="对当前运行提出一个限定范围的核验或补查问题" disabled={running} />
             <button className="followup-action" onClick={runFollowUp} disabled={running || !activeRunId}><Send size={15} /> 补查</button>
+          </div>
+        </section>
+
+        <section className="trace-section" id="trace">
+          <div className="section-heading">
+            <div><span className="eyebrow eyebrow-accent">TRACE REPLAY</span><h2>运行轨迹</h2></div>
+            <div className="trace-heading-meta"><span className="section-note">{activeRunId || '等待运行'}</span><ListFilter size={15} /></div>
+          </div>
+          <div className="trace-toolbar">
+            <div className="trace-filter" role="tablist" aria-label="Trace 筛选">
+              <button className={traceFilter === 'all' ? 'trace-filter-active' : ''} onClick={() => setTraceFilter('all')}>全部</button>
+              <button className={traceFilter === 'collect' ? 'trace-filter-active' : ''} onClick={() => setTraceFilter('collect')}>采集</button>
+              <button className={traceFilter === 'done' ? 'trace-filter-active' : ''} onClick={() => setTraceFilter('done')}>完成</button>
+            </div>
+            <span className="panel-count">{traceEvents.length} / {events.length} events</span>
+          </div>
+          <div className="trace-panel">
+            {traceEvents.length ? traceEvents.map((event, index) => <TraceRow event={event} index={index} key={event.id} />) : (
+              <div className="empty-panel"><TerminalSquare size={23} /><span>选择一条运行历史或开始研究后，这里会保留完整的结构化轨迹。</span></div>
+            )}
           </div>
         </section>
 
@@ -445,6 +473,19 @@ function RunEventRow({ event }: { event: RunEvent }) {
     event.cache_hit ? '缓存命中' : '',
   ].filter(Boolean).join(' · ')
   return <div className="activity-row"><span className={`activity-icon ${isDone ? 'activity-icon-done' : ''}`}>{isDone ? <Check size={13} /> : <Activity size={13} />}</span><div><strong>{event.message || event.type}</strong><span>{event.source ? sourceName(event.source) : event.stage || 'system'}{metrics ? ` · ${metrics}` : ''}</span></div><time>{formatTime(event.created_at)}</time></div>
+}
+
+function TraceRow({ event, index }: { event: RunEvent; index: number }) {
+  const terminal = ['completed', 'partial', 'cancelled', 'failed'].includes(event.type)
+  const metrics = [
+    event.source ? sourceName(event.source) : event.stage || 'system',
+    event.new_records || event.records ? `${event.new_records || event.records} 新` : '',
+    event.duplicate_records ? `${event.duplicate_records} 重复` : '',
+    event.latency_ms ? `${Math.round(event.latency_ms)} ms` : '',
+    event.pages && event.pages > 1 ? `${event.pages} 页` : '',
+    event.cache_hit ? '缓存命中' : '',
+  ].filter(Boolean).join(' · ')
+  return <div className={`trace-row ${terminal ? 'trace-row-terminal' : ''}`}><span className="trace-index">{String(index + 1).padStart(2, '0')}</span><span className={`trace-node ${terminal ? 'trace-node-terminal' : ''}`} /> <div className="trace-main"><strong>{event.message || event.type}</strong><span>{metrics}</span></div><span className="trace-type">{event.type}</span><time>{formatTime(event.created_at)}</time></div>
 }
 
 function SourceRow({ source }: { source: SourceStatus }) {
