@@ -534,6 +534,25 @@ function App() {
     }
   }
 
+  async function exportJson() {
+    if (!activeRunId) {
+      setError('请先完成一次运行，再导出报告。')
+      return
+    }
+    try {
+      const payload = await fetchRun(activeRunId)
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `signal-radar-${activeRunId}.json`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'JSON 报告导出失败，请检查 API Token。')
+    }
+  }
+
   async function reloadTrace() {
     if (!activeRunId) return
     try {
@@ -845,7 +864,7 @@ function App() {
         <section className="evidence-section" id="evidence">
           <div className="section-heading">
             <div><span className="eyebrow eyebrow-accent">证据链</span><h2>最近证据</h2></div>
-            <div className="section-heading-actions"><span className="section-note">{annotations.length ? `已复核 ${annotations.length} 条` : '点击标题打开原文'}</span><button className="text-action" onClick={exportAnnotations} disabled={!annotations.length}><FileJson size={14} /> 导出标注</button><button className="text-action" onClick={exportMarkdown} disabled={!activeRunId}><Download size={14} /> 导出 Markdown</button></div>
+            <div className="section-heading-actions"><span className="section-note">{annotations.length ? `已复核 ${annotations.length} 条` : '点击标题打开原文'}</span><button className="text-action" onClick={exportAnnotations} disabled={!annotations.length}><FileJson size={14} /> 导出标注</button><button className="text-action" onClick={exportJson} disabled={!activeRunId}><FileJson size={14} /> 导出 JSON</button><button className="text-action" onClick={exportMarkdown} disabled={!activeRunId}><Download size={14} /> 导出 Markdown</button></div>
           </div>
           <div className="evidence-grid">
             {(report?.evidence ?? []).slice(0, 6).map((item) => <EvidenceCard
