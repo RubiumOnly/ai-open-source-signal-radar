@@ -628,6 +628,29 @@ def create_app(
             "runs": len(history),
         }
 
+    @service.get("/api/capabilities")
+    def capabilities() -> dict[str, Any]:
+        """返回不含密钥的来源能力与授权边界。"""
+
+        availability = browser_adapter.availability()
+        return {
+            "service": "signal-radar",
+            "version": SERVICE_VERSION,
+            "read_only": True,
+            "api_auth_enabled": service.state.api_auth_enabled,
+            "cache_enabled": source_cache is not None,
+            "browser_use": {
+                "available": bool(availability.get("available")),
+                "reason": str(availability.get("reason") or "unknown"),
+                "enabled": browser_adapter.enabled,
+                "run_live": browser_adapter.run_live,
+                "allowed_domains": list(browser_adapter.allowed_domains),
+                "max_steps": browser_adapter.max_steps,
+                "timeout_seconds": browser_adapter.timeout_seconds,
+            },
+            "structured_sources": ["github", "github_prs", "github_discussions", "github_pr_comments", "rss", "hackernews", "reddit"],
+        }
+
     @service.get("/api/runs", response_model=list[Run], dependencies=[Depends(require_api_token)])
     def runs(
         limit: int = Query(default=20, ge=1, le=100),

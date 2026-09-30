@@ -1,4 +1,4 @@
-import type { FollowUpRequest, MetricsResponse, PlanResponse, Report, ResearchPlan, Run, RunEvent, RunResponse, RunMode, ResearchMode } from '../types'
+import type { CapabilitiesResponse, FollowUpRequest, MetricsResponse, PlanResponse, Report, ResearchPlan, Run, RunEvent, RunResponse, RunMode, ResearchMode } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -99,6 +99,10 @@ export function fetchReport(): Promise<Report> {
 
 export function fetchMetrics(): Promise<MetricsResponse> {
   return request<MetricsResponse>('/api/metrics')
+}
+
+export function fetchCapabilities(): Promise<CapabilitiesResponse> {
+  return request<CapabilitiesResponse>('/api/capabilities')
 }
 
 export { API_BASE }

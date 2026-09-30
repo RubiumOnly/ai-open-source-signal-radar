@@ -27,8 +27,8 @@ import {
   TerminalSquare,
   XCircle,
 } from 'lucide-react'
-import type { Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SourceStatus } from './types'
-import { cancelRun, createPlan, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchTrace, followUp, startRun, streamRun } from './lib/api'
+import type { CapabilitiesResponse, Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SourceStatus } from './types'
+import { cancelRun, createPlan, fetchCapabilities, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchTrace, followUp, startRun, streamRun } from './lib/api'
 
 const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变化、安装兼容性和社区反馈'
 
@@ -108,12 +108,14 @@ function App() {
   const [runHistory, setRunHistory] = useState<Run[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
+  const [capabilities, setCapabilities] = useState<CapabilitiesResponse | null>(null)
   const [traceFilter, setTraceFilter] = useState<TraceFilter>('all')
   const [cancelRequested, setCancelRequested] = useState(false)
 
   useEffect(() => {
     fetchReport().then(setReport).catch(() => setError('API 尚未启动，运行 Replay 后即可加载报告。'))
     fetchMetrics().then(setMetrics).catch(() => undefined)
+    fetchCapabilities().then(setCapabilities).catch(() => undefined)
     refreshHistory()
   }, [])
 
@@ -491,6 +493,13 @@ function App() {
       {showSettings && <div className="settings-drawer">
         <div className="drawer-heading"><span><KeyRound size={16} /> 本地 API 设置</span><button className="icon-button" title="关闭" onClick={() => setShowSettings(false)}><XCircle size={17} /></button></div>
         <label><span>Bearer Token（只保存在当前浏览器）</span><input type="password" value={token} onChange={(event) => saveToken(event.target.value)} placeholder="共享 API 启用认证时填写" /></label>
+        {capabilities && <div className="capability-list">
+          <div><span>Browser Use</span><strong>{capabilities.browser_use.available ? '可运行' : '未就绪'}</strong></div>
+          <div><span>状态</span><strong>{capabilities.browser_use.reason}</strong></div>
+          <div><span>域名白名单</span><strong>{capabilities.browser_use.allowed_domains.join(', ') || '未配置'}</strong></div>
+          <div><span>增量缓存</span><strong>{capabilities.cache_enabled ? '已启用' : '已关闭'}</strong></div>
+          <div><span>API 认证</span><strong>{capabilities.api_auth_enabled ? '已启用' : '本地开放'}</strong></div>
+        </div>}
         <p>Token 不会写入代码或 URL。Replay 本地运行通常不需要填写。</p>
       </div>}
     </div>

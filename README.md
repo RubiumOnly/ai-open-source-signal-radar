@@ -215,6 +215,7 @@ GET  /api/runs/{run_id}/trace          回放同一组结构化事件
 POST /api/runs/{run_id}/follow-up      基于已有报告创建有界补查
 GET  /api/runs/{run_id}                查询运行和报告
 GET  /api/metrics                      查看当前与历史来源质量指标
+GET  /api/capabilities                 查看只读来源能力与授权边界（不返回密钥）
 ```
 
 工作台的“运行历史”直接读取 SQLite 运行记录。选择某次运行后，页面会恢复该运行的报告、来源状态和结构化事件；服务重启后仍可回放，不依赖进程内缓存。
@@ -299,7 +300,8 @@ Invoke-RestMethod http://localhost:8000/api/runs/run-local-demo/cancel -Method P
 运行不能撤销。`GET /api/runs/{run_id}` 会返回结构化预算、来源状态和取消标志，方便
 审计实际消耗，而不是只记录最终报告。
 
-React 工作台在 Live 运行期间会显示“取消运行”操作；取消请求只设置运行控制句柄，
+React 工作台的“本地设置”抽屉会显示 Browser Use 能力、域名白名单、缓存和 API 认证状态；
+这些状态不会包含任何密钥。工作台在 Live 运行期间会显示“取消运行”操作；取消请求只设置运行控制句柄，
 不会执行来源写操作，也不会强制终止正在进行的外部请求。
 
 #### 网页 Prompt Injection 与只读边界

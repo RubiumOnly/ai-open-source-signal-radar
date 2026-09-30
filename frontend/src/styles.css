@@ -238,6 +238,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--sage); box-shado
 .drawer-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; color: var(--forest); font-size: 13px; font-weight: 650; }
 .drawer-heading span { display: flex; align-items: center; gap: 7px; }
 .settings-drawer p { margin-top: 11px; color: var(--ink-3); font-size: 11px; }
+.capability-list { display: grid; gap: 1px; margin-top: 15px; border-top: 1px solid var(--line); }
+.capability-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 11px; }
+.capability-list span { color: var(--ink-3); }
+.capability-list strong { max-width: 66%; color: var(--ink-2); font-weight: 600; overflow-wrap: anywhere; text-align: right; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

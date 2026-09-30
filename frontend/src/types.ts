@@ -136,6 +136,24 @@ export interface MetricsResponse {
   runs: number
 }
 
+export interface CapabilitiesResponse {
+  service: string
+  version: string
+  read_only: boolean
+  api_auth_enabled: boolean
+  cache_enabled: boolean
+  browser_use: {
+    available: boolean
+    reason: string
+    enabled: boolean
+    run_live: boolean
+    allowed_domains: string[]
+    max_steps: number
+    timeout_seconds: number
+  }
+  structured_sources: string[]
+}
+
 export interface Run {
   run_id: string
   mode: RunMode

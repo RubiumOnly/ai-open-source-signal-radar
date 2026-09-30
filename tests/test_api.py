@@ -166,6 +166,18 @@ class LiveOrchestrationTests(unittest.TestCase):
         self.assertIn("history", payload)
         self.assertEqual(payload["runs"], 1)
 
+    def test_capabilities_endpoint_exposes_read_only_browser_boundary_without_secrets(self) -> None:
+        from fastapi.testclient import TestClient
+
+        client = TestClient(create_app(api_token="secret-token"))
+        response = client.get("/api/capabilities")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["api_auth_enabled"])
+        self.assertIn("allowed_domains", payload["browser_use"])
+        self.assertNotIn("api_key", str(payload).lower())
+
 
 if __name__ == "__main__":
     unittest.main()

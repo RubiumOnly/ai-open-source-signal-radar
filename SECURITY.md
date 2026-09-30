@@ -19,6 +19,7 @@ Signal Radar 会访问公开网页和第三方模型接口。请把它运行在�
 - 不要把 Token 写进 URL、前端构建产物、Issue、日志或仓库文件。若 Token 泄露，应立即撤销并重新生成；
 - Bearer Token 只保护 API 访问，不替代反向代理、TLS、速率限制、网络隔离或用户级审计。生产环境应在 API 前面增加这些控制。
 - React 工作台只把用户主动填写的 Token 保存在当前浏览器本地存储中；项目源码和构建产物不包含 Token。不要把 Token 放进 URL 或截图。
+- `/api/capabilities` 只返回来源是否可用、域名白名单和运行上限，不返回模型 Key、GitHub Token、Cookie 或浏览器 Profile 路径。
 
 ## 浏览器边界
 
