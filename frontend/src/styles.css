@@ -96,7 +96,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--sage); box-shado
 .plan-meta, .plan-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 13px; color: var(--ink-2); font: 10px/1.4 var(--mono); }
 .plan-meta span { display: inline-flex; align-items: center; gap: 5px; }
 .plan-tags { grid-column: 1 / 2; }
-.plan-tags span { padding: 4px 7px; color: var(--forest); border: 1px solid #c6ddd0; background: #e7f1eb; }
+.plan-tags span, .plan-tags .source-tag { padding: 4px 7px; color: var(--forest); border: 1px solid #c6ddd0; background: #e7f1eb; }
+.plan-tags .source-tag { cursor: pointer; font: 10px/1.2 var(--mono); }
+.plan-tags .source-tag:hover, .plan-tags .source-tag:focus-visible { border-color: var(--sage); outline: none; }
+.plan-tags .source-tag:not(.source-tag-active) { color: var(--ink-3); border-color: var(--line); background: var(--surface); text-decoration: line-through; }
 .plan-tags .tag-muted { color: var(--ink-2); border-color: var(--line); background: var(--surface); }
 .plan-urls { display: flex; align-items: flex-start; gap: 6px; grid-column: 1 / 2; min-width: 0; color: var(--sage); font: 10px/1.4 var(--mono); overflow-wrap: anywhere; }
 .plan-urls svg { flex: 0 0 auto; margin-top: 2px; }

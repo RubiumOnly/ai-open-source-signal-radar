@@ -98,6 +98,7 @@ function App() {
   const [researchMode, setResearchMode] = useState<ResearchMode>('standard')
   const [runMode, setRunMode] = useState<RunMode>('replay')
   const [plan, setPlan] = useState<ResearchPlan | null>(null)
+  const [selectedSources, setSelectedSources] = useState<string[]>([])
   const [report, setReport] = useState<Report | null>(null)
   const [events, setEvents] = useState<RunEvent[]>([])
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
@@ -158,6 +159,7 @@ function App() {
     try {
       const response = await createPlan(query.trim(), project.trim(), researchMode)
       setPlan(response.plan)
+      setSelectedSources(response.plan.sources)
       return response.plan
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '研究计划生成失败')
@@ -168,12 +170,13 @@ function App() {
   async function runResearch() {
     const nextPlan = plan ?? await makePlan()
     if (!nextPlan) return
+    const confirmedPlan = { ...nextPlan, sources: plan && selectedSources.length ? selectedSources : nextPlan.sources }
     setRunning(true)
     setCancelRequested(false)
     setError('')
     setEvents([])
     try {
-      const started = await startRun(nextPlan, runMode)
+      const started = await startRun(confirmedPlan, runMode)
       setActiveRunId(started.run.run_id)
       await streamRun(started.run.run_id, (event) => setEvents((current) => [...current, event]))
       const finished = await fetchRun(started.run.run_id)
@@ -253,6 +256,15 @@ function App() {
     else window.localStorage.removeItem('signal-radar-api-token')
   }
 
+  function toggleSource(source: string) {
+    setSelectedSources((current) => {
+      if (current.includes(source)) {
+        return current.length > 1 ? current.filter((item) => item !== source) : current
+      }
+      return [...current, source]
+    })
+  }
+
   function jumpTo(id: string) {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -312,7 +324,7 @@ function App() {
           <div className="brief-grid">
             <div className="brief-composer">
               <div className="composer-label"><Sparkles size={15} /> 自然语言研究简报</div>
-              <textarea value={query} onChange={(event) => { setQuery(event.target.value); setPlan(null) }} placeholder="例如：分析某个项目最近 30 天的安装问题和社区反馈" />
+              <textarea value={query} onChange={(event) => { setQuery(event.target.value); setPlan(null); setSelectedSources([]) }} placeholder="例如：分析某个项目最近 30 天的安装问题和社区反馈" />
               <div className="composer-bottom">
                 <div className="composer-hint"><Search size={14} /> 计划解析不会访问网络</div>
                 <button className="secondary-action" onClick={makePlan} disabled={running}>解析计划 <ChevronRight size={15} /></button>
@@ -321,7 +333,7 @@ function App() {
             <div className="brief-fields">
               <label>
                 <span>GitHub 项目（可选）</span>
-                <div className="input-with-icon"><FolderGit2 size={15} /><input value={project} onChange={(event) => { setProject(event.target.value); setPlan(null) }} placeholder="owner/repository" /></div>
+                <div className="input-with-icon"><FolderGit2 size={15} /><input value={project} onChange={(event) => { setProject(event.target.value); setPlan(null); setSelectedSources([]) }} placeholder="owner/repository" /></div>
               </label>
               <label>
                 <span>调研深度</span>
@@ -349,7 +361,7 @@ function App() {
                 <span><FolderGit2 size={14} /> {plan.project}</span>
               </div>
               <div className="plan-tags">
-                {(plan.sources.length ? plan.sources : ['github', 'rss', 'hackernews']).map((source) => <span key={source}>{sourceName(source)}</span>)}
+                {(plan.sources.length ? plan.sources : ['github', 'rss', 'hackernews']).map((source) => <button className={selectedSources.includes(source) ? 'source-tag source-tag-active' : 'source-tag'} key={source} onClick={() => toggleSource(source)} aria-pressed={selectedSources.includes(source)}>{sourceName(source)}</button>)}
                 {(plan.focus.length ? plan.focus : focusFallback).map((focus) => <span className="tag-muted" key={focus}>{focus}</span>)}
               </div>
               {plan.urls.length > 0 && <div className="plan-urls"><ArrowUpRight size={13} /> {plan.urls.join(' · ')}</div>}
