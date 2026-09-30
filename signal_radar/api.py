@@ -43,6 +43,7 @@ from .sources import (
     HackerNewsSourceAdapter,
     RedditSourceAdapter,
     RSSSourceAdapter,
+    StackOverflowSourceAdapter,
     SourceFetchResult,
 )
 from .scheduler import LocalScheduler, SchedulerAlreadyRunning, scheduler_request_from_env
@@ -250,6 +251,7 @@ async def _live_report_async(
     rss: RSSSourceAdapter | None = None,
     hackernews: HackerNewsSourceAdapter | None = None,
     reddit: RedditSourceAdapter | None = None,
+    stackoverflow: StackOverflowSourceAdapter | None = None,
     budget: RunBudget | None = None,
     cancel_event: threading.Event | None = None,
     event_sink: Callable[[RunEvent], None] | None = None,
@@ -269,7 +271,7 @@ async def _live_report_async(
     if not requested_sources:
         requested_sources = ["github"]
     if "all" in requested_sources:
-        requested_sources = ["github", "rss", "hackernews", "reddit", "browser_use"]
+        requested_sources = ["github", "rss", "hackernews", "reddit", "stackoverflow", "browser_use"]
     if "media" in requested_sources:
         requested_sources.append("browser_use")
 
@@ -351,6 +353,12 @@ async def _live_report_async(
         else:
             query = payload.reddit_query or payload.community_query or repository.rsplit("/", 1)[-1]
             jobs.append(("Reddit", lambda: reddit.collect(query, limit=payload.limit, since=since)))
+    if "stackoverflow" in requested_sources or "stack_exchange" in requested_sources:
+        if stackoverflow is None:
+            jobs.append(("Stack Overflow", lambda: disabled("Stack Overflow", "community", "Stack Exchange adapter is not configured")))
+        else:
+            query = payload.stackoverflow_query or repository.rsplit("/", 1)[-1]
+            jobs.append(("Stack Overflow", lambda: stackoverflow.collect(query, limit=payload.limit, since=since)))
 
     async def run_job(source: str, job: Callable[[], SourceFetchResult]) -> SourceFetchResult:
         started = time.perf_counter()
@@ -443,6 +451,7 @@ def _live_report(
     rss: RSSSourceAdapter | None = None,
     hackernews: HackerNewsSourceAdapter | None = None,
     reddit: RedditSourceAdapter | None = None,
+    stackoverflow: StackOverflowSourceAdapter | None = None,
     budget: RunBudget | None = None,
     cancel_event: threading.Event | None = None,
     event_sink: Callable[[RunEvent], None] | None = None,
@@ -457,6 +466,7 @@ def _live_report(
         rss=rss,
         hackernews=hackernews,
         reddit=reddit,
+        stackoverflow=stackoverflow,
         budget=budget,
         cancel_event=cancel_event,
         event_sink=event_sink,
@@ -471,6 +481,7 @@ def create_app(
     rss_adapter: RSSSourceAdapter | None = None,
     hackernews_adapter: HackerNewsSourceAdapter | None = None,
     reddit_adapter: RedditSourceAdapter | None = None,
+    stackoverflow_adapter: StackOverflowSourceAdapter | None = None,
     history_store: HistoryStore | None = None,
     source_cache: SourceCache | None = None,
     api_token: str | None = None,
@@ -524,6 +535,13 @@ def create_app(
         timeout=_env_int("SIGNAL_RADAR_REDDIT_TIMEOUT", 8, 1, 60),
         max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 50, 1, 100),
         max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 4, 1, 20),
+        cache=source_cache,
+    )
+    stackoverflow_adapter = stackoverflow_adapter or StackOverflowSourceAdapter(
+        site=os.getenv("SIGNAL_RADAR_STACKEXCHANGE_SITE", "stackoverflow"),
+        timeout=_env_int("SIGNAL_RADAR_STACKEXCHANGE_TIMEOUT", 8, 1, 60),
+        max_limit=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_LIMIT", 50, 1, 100),
+        max_pages=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES", 4, 1, 20),
         cache=source_cache,
     )
     history_store = history_store or HistoryStore(
@@ -648,7 +666,7 @@ def create_app(
                 "max_steps": browser_adapter.max_steps,
                 "timeout_seconds": browser_adapter.timeout_seconds,
             },
-            "structured_sources": ["github", "github_prs", "github_discussions", "github_pr_comments", "rss", "hackernews", "reddit"],
+            "structured_sources": ["github", "github_prs", "github_discussions", "github_pr_comments", "rss", "hackernews", "reddit", "stackoverflow"],
         }
 
     @service.get("/api/runs", response_model=list[Run], dependencies=[Depends(require_api_token)])
@@ -884,6 +902,7 @@ def create_app(
                     rss=rss_adapter,
                     hackernews=hackernews_adapter,
                     reddit=reddit_adapter,
+                    stackoverflow=stackoverflow_adapter,
                     budget=budget,
                     cancel_event=control.cancel_event,
                     event_sink=append_run_event,

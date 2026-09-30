@@ -31,6 +31,8 @@ _ALLOWED_SOURCES = {
     "github_pr_comments",
     "pull_request_comments",
     "pr_comments",
+    "stackoverflow",
+    "stack_exchange",
     "rss",
     "feed",
     "official",
@@ -84,6 +86,7 @@ def scheduler_request_from_env() -> SchedulerRequest:
         urls=urls[:20],
         feed_urls=feed_urls[:20],
         community_query=os.getenv("SIGNAL_RADAR_SCHEDULER_COMMUNITY_QUERY") or None,
+        stackoverflow_query=os.getenv("SIGNAL_RADAR_SCHEDULER_STACKOVERFLOW_QUERY") or None,
     )
     return SchedulerRequest(
         request=request,

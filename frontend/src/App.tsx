@@ -40,6 +40,7 @@ const sourceLabels: Record<string, string> = {
   rss: '官方 RSS',
   hackernews: 'Hacker News',
   reddit: 'Reddit',
+  stackoverflow: 'Stack Overflow',
   browser_use: '动态网页',
 }
 

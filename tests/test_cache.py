@@ -7,7 +7,7 @@ import unittest
 from datetime import datetime, timezone
 
 from signal_radar.cache import SourceCache
-from signal_radar.sources import GitHubSourceAdapter, HackerNewsSourceAdapter
+from signal_radar.sources import GitHubSourceAdapter, HackerNewsSourceAdapter, StackOverflowSourceAdapter
 
 
 class _Response:
@@ -214,6 +214,56 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(result.status.records, 1)
         self.assertEqual(result.articles[0].author, "reviewer")
         self.assertEqual(result.claims[0].claim_type, "pull_request_comment")
+
+    def test_stackoverflow_maps_public_questions_and_paginates(self) -> None:
+        pages = [
+            {
+                "items": [{
+                    "question_id": 101,
+                    "link": "https://stackoverflow.com/questions/101/browser-use",
+                    "title": "How to fix browser-use timeout?",
+                    "body_markdown": "<p>The task fails with a timeout error.</p>",
+                    "creation_date": 1790630400,
+                    "owner": {"display_name": "developer"},
+                    "tags": ["python", "browser-use"],
+                    "score": 2,
+                    "answer_count": 1,
+                    "is_answered": True,
+                }],
+                "has_more": True,
+            },
+            {
+                "items": [{
+                    "question_id": 102,
+                    "link": "https://stackoverflow.com/questions/102/browser-use-2",
+                    "title": "Browser automation setup",
+                    "body_markdown": "<p>Setup works after installing Chromium.</p>",
+                    "creation_date": 1790630401,
+                    "owner": {"display_name": "maintainer"},
+                    "tags": ["python"],
+                    "score": 4,
+                    "answer_count": 2,
+                    "is_answered": True,
+                }],
+                "has_more": False,
+            },
+        ]
+        requests = []
+
+        def opener(request, timeout):
+            self.assertGreater(timeout, 0)
+            requests.append(request.full_url)
+            return _Response(pages.pop(0))
+
+        result = StackOverflowSourceAdapter(opener=opener, max_pages=3).collect("browser-use", limit=2)
+        self.assertEqual(result.status.source, "Stack Overflow")
+        self.assertEqual(result.status.pages, 2)
+        self.assertEqual(result.status.records, 2)
+        self.assertEqual(result.articles[0].author, "developer")
+        self.assertEqual(result.evidence[0].evidence_level, "full_text")
+        self.assertEqual(result.claims[0].claim_type, "technical_question")
+        self.assertIn("page=1", requests[0])
+        self.assertIn("page=2", requests[1])
 
 
 if __name__ == "__main__":

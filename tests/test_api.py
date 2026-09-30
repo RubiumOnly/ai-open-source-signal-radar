@@ -53,6 +53,17 @@ class _FakeHackerNews:
         )
 
 
+class _FakeStackOverflow:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def collect(self, query, *, limit, since):
+        self.calls.append((query, limit, since))
+        return SourceFetchResult(
+            status=SourceStatus(source="Stack Overflow", source_type="community", status="ok", records=0)
+        )
+
+
 class LiveOrchestrationTests(unittest.TestCase):
     def test_requested_sources_are_collected_with_a_shared_deadline(self) -> None:
         class Slow:
@@ -148,6 +159,23 @@ class LiveOrchestrationTests(unittest.TestCase):
             hackernews=hackernews,
         )
         self.assertEqual(hackernews.calls[0][0], "browser-use agent")
+
+    def test_stackoverflow_query_is_forwarded_to_requested_source(self) -> None:
+        stackoverflow = _FakeStackOverflow()
+        _live_report(
+            RunRequest(
+                mode="live",
+                project="org/repo",
+                sources=["stackoverflow"],
+                stackoverflow_query="browser-use timeout",
+                limit=4,
+            ),
+            run_id="run-stackoverflow",
+            github=_FakeGitHub(),
+            browser=_FakeBrowser(),
+            stackoverflow=stackoverflow,
+        )
+        self.assertEqual(stackoverflow.calls[0][0:2], ("browser-use timeout", 4))
 
     def test_metrics_endpoint_returns_current_and_history_snapshots(self) -> None:
         from fastapi.testclient import TestClient

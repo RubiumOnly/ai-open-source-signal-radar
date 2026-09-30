@@ -42,7 +42,7 @@ React Workbench / API
       |
 Run Orchestrator  -- 研究计划、运行 ID、预算、并行、取消、只读策略
       |
-来源适配器：GitHub API（Releases/Issues，按需 Pull Requests/Discussions/PR Comments） / RSS 与 Atom 官方博客 / Hacker News Algolia / Reddit 公共 JSON / Replay fixture / Browser Use 动态网页
+来源适配器：GitHub API（Releases/Issues，按需 Pull Requests/Discussions/PR Comments） / RSS 与 Atom 官方博客 / Hacker News Algolia / Reddit 公共 JSON / Stack Exchange API（按需） / Replay fixture / Browser Use 动态网页
       |
 Browser Use 回退：动态页面、跨页上下文、授权后的本地会话
       |
@@ -101,6 +101,19 @@ story 文本会保存为可引用证据；只有标题的命中会标记为 `met
 ```powershell
 python -m signal_radar --mode live --project browser-use/browser-use `
   --source hackernews --community-query "browser-use" --days 30 --limit 10
+```
+
+### Stack Exchange 技术问答
+
+研究简报中明确提到 Stack Overflow/Stack Exchange，或在 API 请求的 `sources` 中加入
+`stackoverflow`，才会启用 Stack Exchange 公共 API。适配器按活动时间、站点和查询词进行
+有界分页，将问题标题、正文摘录、标签、作者、回答数和来源链接映射为统一证据；API
+配额与 backoff 会显式标记为 `rate_limited`。默认站点为 `stackoverflow`，可用
+`SIGNAL_RADAR_STACKEXCHANGE_SITE` 选择 Stack Exchange 网络中的其他站点。
+
+```powershell
+python -m signal_radar --mode live --project browser-use/browser-use `
+  --source stackoverflow --stackoverflow-query "browser-use timeout" --days 30 --limit 10
 ```
 
 API 请求示例：
@@ -437,7 +450,7 @@ Invoke-RestMethod http://localhost:8000/api/schedule -Method Post -ContentType "
 Invoke-RestMethod http://localhost:8000/api/schedule/stop -Method Post
 ```
 
-调度请求只接受内置来源名称（`github`、`github_prs`、`github_discussions`、`github_pr_comments`、`rss`、`hackernews`、`browser_use`
+调度请求只接受内置来源名称（`github`、`github_prs`、`github_discussions`、`github_pr_comments`、`stackoverflow`、`rss`、`hackernews`、`browser_use`
 及其只读别名），最多 4 个来源和 20 个 URL/feed，间隔限制在 1 秒到 24 小时，
 单个计划最多 1000 次运行。调度线程是 daemon 线程；停止服务或调用 stop 后，
 不会再创建新的 tick。正在进行的 Live 运行会尽力通过现有取消句柄停止。
@@ -569,7 +582,7 @@ tests/              不需要网络/API Key 的契约与单元测试
 
 ## 当前扩展版范围
 
-- 已完成多源采集：GitHub（含按需 PR/Discussions/PR Comments）、RSS/Atom、Hacker News Algolia、Reddit 公共 JSON 和 Browser Use 动态页面；
+- 已完成多源采集：GitHub（含按需 PR/Discussions/PR Comments）、RSS/Atom、Hacker News Algolia、Reddit 公共 JSON、按需 Stack Exchange API 和 Browser Use 动态页面；
 - 已完成证据链、趋势、主题、关键事件、风险评分与 Markdown 导出；
 - 已完成 SQLite 运行历史、预算、取消接口、域名白名单和 Prompt Injection 回归门禁；
 - 已完成离线评测 harness、失败样例、GitHub Actions 质量门禁和桌面/移动截图；

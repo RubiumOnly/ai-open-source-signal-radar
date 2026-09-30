@@ -21,7 +21,7 @@ from .history import HistoryStore
 from .models import Run, RunRequest, RunResponse, SchedulerRequest
 from .repository import load_fixture_report
 from .scheduler import LocalScheduler, scheduler_request_from_env
-from .sources import BrowserUseSourceAdapter, GitHubSourceAdapter, HackerNewsSourceAdapter, RedditSourceAdapter, RSSSourceAdapter
+from .sources import BrowserUseSourceAdapter, GitHubSourceAdapter, HackerNewsSourceAdapter, RedditSourceAdapter, RSSSourceAdapter, StackOverflowSourceAdapter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,11 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=float, default=None, help="Live run timeout budget")
     parser.add_argument(
         "--source",
-        choices=("github", "github_prs", "github_discussions", "github_pr_comments", "rss", "official", "hackernews", "reddit", "community", "browser_use", "all"),
+        choices=("github", "github_prs", "github_discussions", "github_pr_comments", "rss", "official", "hackernews", "reddit", "stackoverflow", "community", "browser_use", "all"),
         default="github",
     )
     parser.add_argument("--community-query", help="Hacker News query; defaults to the project name")
     parser.add_argument("--reddit-query", help="Reddit query; defaults to the project name")
+    parser.add_argument("--stackoverflow-query", help="Stack Overflow query; defaults to the project name")
     parser.add_argument("--url", action="append", default=[], help="Dynamic URL; may be repeated")
     parser.add_argument("--feed-url", action="append", default=[], help="RSS/Atom feed URL; may be repeated")
     parser.add_argument("--enable-browser-use", action="store_true", help="Allow the Browser Use adapter")
@@ -100,7 +101,7 @@ def _browser_adapter(args: argparse.Namespace) -> BrowserUseSourceAdapter:
 def _request_from_args(args: argparse.Namespace, *, run_id: str | None = None) -> RunRequest:
     """Build one bounded request shared by one-shot and scheduled CLI modes."""
 
-    sources = ["github", "rss", "hackernews", "browser_use"] if args.source == "all" else [args.source]
+    sources = ["github", "rss", "hackernews", "reddit", "stackoverflow", "browser_use"] if args.source == "all" else [args.source]
     return RunRequest(
         mode=args.mode,
         project=args.project,
@@ -110,6 +111,8 @@ def _request_from_args(args: argparse.Namespace, *, run_id: str | None = None) -
         urls=args.url,
         feed_urls=args.feed_url,
         community_query=args.community_query,
+        reddit_query=args.reddit_query,
+        stackoverflow_query=args.stackoverflow_query,
         max_steps=args.max_steps,
         timeout_seconds=args.timeout_seconds,
         run_id=run_id,
@@ -149,6 +152,13 @@ def _scheduled_cli(args: argparse.Namespace) -> int:
         max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 4, 1, 20),
         cache=cache,
     )
+    stackoverflow = StackOverflowSourceAdapter(
+        site=os.getenv("SIGNAL_RADAR_STACKEXCHANGE_SITE", "stackoverflow"),
+        timeout=float(_env_int("SIGNAL_RADAR_STACKEXCHANGE_TIMEOUT", 8, 1, 60)),
+        max_limit=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_LIMIT", 50, 1, 100),
+        max_pages=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES", 4, 1, 20),
+        cache=cache,
+    )
 
     def execute(payload: RunRequest) -> RunResponse:
         run_id = payload.run_id or "cli-scheduled"
@@ -170,6 +180,7 @@ def _scheduled_cli(args: argparse.Namespace) -> int:
                     rss=rss,
                     hackernews=hackernews,
                     reddit=reddit,
+                    stackoverflow=stackoverflow,
                 )
                 status = "completed" if all(item.status in {"ok", "replay"} for item in statuses) else "partial"
                 error = None
@@ -240,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         report = load_fixture_report(args.fixture)
         report = report.model_copy(update={"run_id": run_id, "window_days": args.days})
     else:
-        sources = ["github", "rss", "hackernews", "reddit", "browser_use"] if args.source == "all" else [args.source]
+        sources = ["github", "rss", "hackernews", "reddit", "stackoverflow", "browser_use"] if args.source == "all" else [args.source]
         request = RunRequest(
             mode="live",
             project=args.project,
@@ -251,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
             feed_urls=args.feed_url,
             community_query=args.community_query,
             reddit_query=args.reddit_query,
+            stackoverflow_query=args.stackoverflow_query,
             max_steps=args.max_steps,
             timeout_seconds=args.timeout_seconds,
         )
@@ -282,6 +294,13 @@ def main(argv: list[str] | None = None) -> int:
                     timeout=float(_env_int("SIGNAL_RADAR_REDDIT_TIMEOUT", 8, 1, 60)),
                     max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 50, 1, 100),
                     max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 4, 1, 20),
+                    cache=cache,
+                ),
+                stackoverflow=StackOverflowSourceAdapter(
+                    site=os.getenv("SIGNAL_RADAR_STACKEXCHANGE_SITE", "stackoverflow"),
+                    timeout=float(_env_int("SIGNAL_RADAR_STACKEXCHANGE_TIMEOUT", 8, 1, 60)),
+                    max_limit=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_LIMIT", 50, 1, 100),
+                    max_pages=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES", 4, 1, 20),
                     cache=cache,
                 ),
             )

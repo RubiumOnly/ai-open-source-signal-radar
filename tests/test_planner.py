@@ -25,6 +25,10 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(plan.window_days, 30)
         self.assertEqual(plan.sources[:3], ["github", "rss", "hackernews"])
 
+    def test_stackoverflow_keyword_selects_public_technical_qa_source(self) -> None:
+        plan = build_plan(PlanRequest(query="分析 browser-use 在 Stack Overflow 上的安装问题"))
+        self.assertIn("stackoverflow", plan.sources)
+
     def test_preserves_explicit_public_urls_for_confirmed_dynamic_collection(self) -> None:
         plan = build_plan(PlanRequest(
             query="查看 https://www.csdn.net/article/123，分析登录后可见的安装反馈",

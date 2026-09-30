@@ -117,6 +117,13 @@ def _hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
+def _strip_html(value: Any) -> str:
+    """将公开 API 返回的 HTML 正文压缩为可引用纯文本。"""
+
+    text = html.unescape(str(value or ""))
+    return re.sub(r"<[^>]+>", " ", text)
+
+
 def _normalise_repository(repository: str) -> tuple[str, str] | None:
     value = repository.strip()
     value = re.sub(r"^https?://(www\.)?github\.com/", "", value, flags=re.I)
@@ -1750,6 +1757,246 @@ class RedditSourceAdapter:
     fetch = collect
 
 
+class StackOverflowSourceAdapter:
+    """通过 Stack Exchange 公共 API 读取技术问答信号。
+
+    该来源默认不启用，使用明确的 ``stackoverflow`` 查询才会访问 API。
+    API 配额、backoff、分页和缓存命中都会转成显式来源状态；不需要登录，
+    也不会执行问题正文中的指令。
+    """
+
+    base_url = "https://api.stackexchange.com/2.3/search/advanced"
+
+    def __init__(
+        self,
+        *,
+        site: str = "stackoverflow",
+        timeout: float = 8.0,
+        max_limit: int = 50,
+        max_pages: int = 4,
+        max_bytes: int = 2_000_000,
+        cache: SourceCache | None = None,
+        opener: JsonOpener | None = None,
+    ) -> None:
+        self.site = str(site or "stackoverflow").strip().lower()[:40]
+        self.timeout = max(0.5, float(timeout))
+        self.max_limit = max(1, min(int(max_limit), 100))
+        self.max_pages = max(1, min(int(max_pages), 20))
+        self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
+        self.cache = cache
+        self._opener = opener or urlopen
+
+    @staticmethod
+    def _normalise_query(query: str | None) -> str | None:
+        value = str(query or "").strip()
+        return value[:160] or None
+
+    def _fetch(
+        self,
+        query: str,
+        *,
+        limit: int,
+        page: int,
+        since: datetime | None,
+    ) -> tuple[list[dict[str, Any]], int | None, str | None, float, bool, bool]:
+        params: dict[str, Any] = {
+            "order": "desc",
+            "sort": "activity",
+            "site": self.site,
+            "q": query,
+            "pagesize": limit,
+            "page": page,
+            "filter": "withbody",
+        }
+        if since:
+            params["fromdate"] = int(since.timestamp())
+        cache_key = f"stackoverflow:{self.site}:{query}:{_cache_time_key(since)}:page:{page}"
+        base_headers = {
+            "Accept": "application/json",
+            "User-Agent": "signal-radar/0.3 (+https://github.com/RubiumOnly/ai-open-source-signal-radar)",
+        }
+        request_url = f"{self.base_url}?{urlencode(params)}"
+        request = Request(request_url, headers={**base_headers, **(self.cache.request_headers(cache_key) if self.cache else {})})
+        started = time.perf_counter()
+        try:
+            with self._opener(request, timeout=self.timeout) as response:
+                status_code = getattr(response, "status", None) or response.getcode()
+                if status_code == 304:
+                    with self._opener(Request(request_url, headers=base_headers), timeout=self.timeout) as fresh:
+                        status_code = getattr(fresh, "status", None) or fresh.getcode()
+                        response_headers = getattr(fresh, "headers", None)
+                        raw = fresh.read(self.max_bytes + 1)
+                else:
+                    response_headers = getattr(response, "headers", None)
+                    raw = response.read(self.max_bytes + 1)
+            if status_code is not None and status_code >= 400:
+                return [], status_code, f"http_{status_code}", _latency(started), False, False
+            if not isinstance(raw, (bytes, bytearray)):
+                raw = str(raw).encode("utf-8", errors="replace")
+            if len(raw) > self.max_bytes:
+                return [], status_code, "response_too_large", _latency(started), False, False
+            cache_hit = False
+            if self.cache:
+                cache_hit = not self.cache.save_response(
+                    cache_key,
+                    bytes(raw),
+                    etag=response_headers.get("ETag") if response_headers is not None else None,
+                    last_modified=response_headers.get("Last-Modified") if response_headers is not None else None,
+                )
+            payload = json.loads(bytes(raw).decode("utf-8"))
+            if isinstance(payload, dict) and payload.get("error_name"):
+                error_name = str(payload.get("error_name"))
+                if error_name in {"throttle_violation", "quota_exceeded", "temporarily_unavailable"}:
+                    return [], status_code, f"api_backoff:{error_name}", _latency(started), cache_hit, False
+                return [], status_code, f"api_error:{error_name}", _latency(started), cache_hit, False
+            if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+                return [], status_code, "invalid_payload", _latency(started), cache_hit, False
+            backoff = payload.get("backoff")
+            if backoff is not None:
+                try:
+                    return [], status_code, f"backoff_{int(backoff)}s", _latency(started), cache_hit, False
+                except (TypeError, ValueError):
+                    return [], status_code, "api_backoff", _latency(started), cache_hit, False
+            return [item for item in payload["items"][:limit] if isinstance(item, dict)], status_code, None, _latency(started), cache_hit, bool(payload.get("has_more"))
+        except HTTPError as exc:
+            return [], exc.code, _error_detail(exc), _latency(started), False, False
+        except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+            return [], None, str(exc)[:240] or exc.__class__.__name__, _latency(started), False, False
+
+    def collect(
+        self,
+        query: str | None = None,
+        *,
+        limit: int = 20,
+        since: datetime | None = None,
+    ) -> SourceFetchResult:
+        normalised = self._normalise_query(query)
+        if not normalised:
+            return SourceFetchResult(status=SourceStatus(
+                source="Stack Overflow", source_type="community", status="error", access_status="error",
+                detail="A non-empty Stack Exchange query is required", error="missing_query",
+            ))
+        bounded_limit = max(1, min(int(limit), self.max_limit))
+        if isinstance(since, str):
+            since = _parse_time(since)
+        if since and since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        articles: list[Article] = []
+        evidence: list[Evidence] = []
+        claims: list[Claim] = []
+        events: list[Event] = []
+        pages = 0
+        latencies: list[float] = []
+        cache_hits: list[bool] = []
+        duplicates = 0
+        candidates = 0
+        cache_key = f"stackoverflow:{self.site}:{normalised}:{_cache_time_key(since)}"
+        errors: list[str] = []
+        for page in range(1, self.max_pages + 1):
+            items, status_code, error, latency, cache_hit, has_more = self._fetch(
+                normalised, limit=bounded_limit, page=page, since=since
+            )
+            pages += 1
+            latencies.append(latency)
+            cache_hits.append(cache_hit)
+            if error:
+                errors.append(error)
+                break
+            for item in items:
+                activity = item.get("last_activity_date") or item.get("creation_date")
+                try:
+                    published = datetime.fromtimestamp(float(activity), tz=timezone.utc) if activity is not None else None
+                except (TypeError, ValueError, OSError, OverflowError):
+                    published = None
+                if since and published and published < since:
+                    continue
+                question_id = str(item.get("question_id") or "").strip()
+                url = str(item.get("link") or "").strip()
+                if not question_id or not url:
+                    continue
+                title = _strip_html(item.get("title") or "Stack Overflow question").strip()
+                body = _strip_html(item.get("body_markdown") or item.get("body") or "").strip()
+                article_id = f"stackoverflow-{_hash_text(question_id + '|' + url)}"
+                text_value = f"{title}\n{body}".strip()
+                article = Article(
+                    id=article_id,
+                    url=url,
+                    title=title or "Stack Overflow question",
+                    source="Stack Overflow",
+                    source_type="community",
+                    author=str((item.get("owner") or {}).get("display_name") or "").strip() or None,
+                    excerpt=(body or title)[:500] or None,
+                    content=body or None,
+                    published_at=published,
+                    access_status="public",
+                    content_hash=_hash_text(text_value),
+                    tags=["community", "stackoverflow"] + [str(tag) for tag in (item.get("tags") or [])[:8]],
+                    metadata={
+                        "collector": "stackexchange_api",
+                        "site": self.site,
+                        "question_id": question_id,
+                        "score": item.get("score"),
+                        "answer_count": item.get("answer_count"),
+                        "is_answered": item.get("is_answered"),
+                    },
+                )
+                candidates += 1
+                if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
+                    duplicates += 1
+                stance, sentiment, category = _classify_feedback(text_value)
+                risk_score = 64.0 if sentiment == "negative" else 18.0 if sentiment == "positive" else 28.0
+                evidence_id = f"ev-{article_id.removeprefix('stackoverflow-')}"
+                claim_id = f"claim-{article_id.removeprefix('stackoverflow-')}"
+                event_id = f"event-{article_id.removeprefix('stackoverflow-')}"
+                evidence_level = "full_text" if body else "metadata_only"
+                confidence = 0.82 if body else 0.55
+                evidence.append(Evidence(
+                    id=evidence_id, article_id=article_id, url=url, source="Stack Overflow", title=article.title,
+                    quote=body[:600] if body else "", evidence_level=evidence_level, confidence=confidence,
+                    published_at=published, content_hash=article.content_hash,
+                ))
+                claims.append(Claim(
+                    id=claim_id, text=text_value[:280].replace("\n", " "),
+                    claim_type="technical_question",
+                    stance=stance, sentiment=sentiment, confidence=confidence, evidence_ids=[evidence_id],
+                    article_ids=[article_id], topics=["community", "stackoverflow"],
+                ))
+                events.append(Event(
+                    id=event_id, title=article.title, category="technical_question", summary=article.excerpt,
+                    risk_level="high" if risk_score >= 60 else "medium" if risk_score >= 30 else "low",
+                    risk_score=risk_score, sentiment=sentiment, occurred_at=published,
+                    article_ids=[article_id], claim_ids=[claim_id], evidence_ids=[evidence_id],
+                ))
+                articles.append(article)
+                if len(articles) >= bounded_limit:
+                    break
+            if len(articles) >= bounded_limit or not has_more:
+                break
+        status_name = "ok"
+        access_name = "public"
+        if errors:
+            if any(error.startswith(("backoff_", "api_backoff:", "api_error:throttle_violation", "api_error:quota_exceeded")) for error in errors):
+                status_name, access_name = "rate_limited", "rate_limited"
+            else:
+                status_name, access_name = "error", "error"
+        detail = f"{len(articles)} records for query={normalised!r} on {self.site}"
+        if errors:
+            detail += "; " + "; ".join(errors)[:240]
+        return SourceFetchResult(
+            status=SourceStatus(
+                source="Stack Overflow", source_type="community", status=status_name, access_status=access_name,
+                records=len(articles), detail=detail, error="; ".join(errors)[:500] if errors else None,
+                latency_ms=round(sum(latencies), 1), pages=pages,
+                cache_hit=bool(cache_hits) and all(cache_hits) if self.cache else False,
+                new_records=max(0, candidates - duplicates), duplicate_records=duplicates,
+                total_candidates=candidates,
+            ),
+            articles=articles, claims=claims, events=events, evidence=evidence,
+        )
+
+    fetch = collect
+
+
 def _latency(started: float) -> float:
     return round((time.perf_counter() - started) * 1000.0, 1)
 
@@ -2355,6 +2602,7 @@ __all__ = [
     "HackerNewsSourceAdapter",
     "RedditAdapter",
     "RedditSourceAdapter",
+    "StackOverflowSourceAdapter",
     "FeedSourceAdapter",
     "RssSourceAdapter",
     "RSSAdapter",

@@ -254,6 +254,7 @@ class RunRequest(ContractModel):
     source: str | None = None
     community_query: str | None = None
     reddit_query: str | None = None
+    stackoverflow_query: str | None = None
     urls: list[str] = Field(default_factory=list)
     feed_urls: list[str] = Field(default_factory=list)
     fixture: str | None = None
