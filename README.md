@@ -552,11 +552,9 @@ GitHub 仓库包含完整源码、测试、fixture 和运行文档。推荐先�
 
 ## Replay 回退预览
 
-下面是 React 研究工作台加载真实 Replay API 后生成的截图，桌面和移动视口均已验证。旧版静态 Replay 页面仍保留为回退入口：
+下面是 React 研究工作台加载真实 Replay API 后生成的最新版桌面截图。旧版静态 Replay 页面仍保留为回退入口：
 
 ![React 研究工作台桌面预览](docs/images/signal-radar-workbench-desktop.png)
-
-![React 研究工作台移动预览](docs/images/signal-radar-workbench-mobile.png)
 
 建议按以下顺序启动一个本地运行：
 
@@ -590,7 +588,7 @@ GitHub API、RSS 和 Hacker News 请求会在来源调用前后检查总预算�
 ```text
 signal_radar/       后端编排、来源适配器、报告模型
 frontend/            React + TypeScript 研究工作台
-docs/images/        README 使用的真实 Dashboard 截图
+docs/images/        README 使用的最新版工作台截图
 web/                旧版静态 Replay 回退
 fixtures/           离线演示和评测输入
 data/               本地 SQLite 运行历史（默认不提交）
@@ -610,7 +608,7 @@ tests/              不需要网络/API Key 的契约与单元测试
 - 已完成多源采集：GitHub（含按需 PR/Discussions/PR Comments）、RSS/Atom、Hacker News Algolia、Reddit 公共 JSON、按需 Stack Exchange API 和 Browser Use 动态页面；
 - 已完成证据链、趋势、主题、关键事件、风险评分与 Markdown 导出；
 - 已完成 SQLite 运行历史、预算、取消接口、域名白名单和 Prompt Injection 回归门禁；
-- 已完成离线评测 harness、失败样例、GitHub Actions 质量门禁和桌面/移动截图；
+- 已完成离线评测 harness、失败样例、GitHub Actions 质量门禁和最新版工作台截图；
 - 已完成默认关闭的本地定时调度：可配置来源、时间间隔和最大次数，每次运行写入 SQLite 历史并支持停止；
 - 已完成有界并行来源编排、研究计划预览、后台运行、结构化 SSE 事件、增量缓存、分页和来源质量指标；
 - 已完成 React 工作台：研究简报、来源预览、运行监控、独立 Trace 回放、风险信号、证据卡片、运行历史和协作式取消均已接入 Replay/API；

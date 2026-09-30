@@ -11,10 +11,12 @@
 - 动态抽取对不可核验的日期和正文降级为 metadata-only。
 - 增加 SQLite 运行历史、Markdown 报告导出和离线评测 harness；
 - 增加 Hacker News 社区来源、运行预算、协作式取消和请求级 CORS 白名单；
-- 增加 Prompt Injection 回归 fixture、安全评测门禁、CI 工作流和 Dashboard 桌面/移动截图。
+- 增加 Prompt Injection 回归 fixture、安全评测门禁、CI 工作流和 Dashboard 展示截图。
 
 ## Unreleased
 
+- 重构 React 工作台视觉层：采用浅色研究工作区、分组侧栏、研究问题主入口、圆角证据面板和衬线标题，保留原有 API、来源、Trace、历史与安全边界；
+- 增加三个可直接套用的研究问题模板，解析计划前不会访问网络；
 - 启动工作台重构：新增 React + TypeScript 研究任务入口、计划预览、来源状态和证据报告界面；
 - 来源编排改为有界并行，保留总预算、取消、部分成功和显式失败状态；
 - 新增确定性的 `/api/plan` 研究计划接口，以及 `/api/runs/{run_id}/events` 和 SSE 运行流；

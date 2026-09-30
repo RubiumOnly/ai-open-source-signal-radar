@@ -289,6 +289,13 @@ function App() {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
+  function applyPrompt(prompt: string) {
+    setQuery(prompt)
+    setPlan(null)
+    setSelectedSources([])
+    setError('')
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -301,17 +308,22 @@ function App() {
         </div>
 
         <nav className="nav-group" aria-label="主导航">
-          <span className="nav-caption">工作台</span>
+          <span className="nav-caption">研究工作台</span>
           <button className="nav-item nav-item-active" onClick={() => jumpTo('overview')}><LayoutDashboard size={17} /> 总览 <span className="nav-dot" /></button>
           <button className="nav-item" onClick={() => jumpTo('history')}><FileSearch size={17} /> 运行历史</button>
           <button className="nav-item" onClick={() => jumpTo('evidence')}><BookOpen size={17} /> 证据库</button>
           <button className="nav-item" onClick={() => jumpTo('insights')}><BarChart3 size={17} /> 主题趋势</button>
-          <span className="nav-caption nav-caption-spaced">系统</span>
+          <span className="nav-caption nav-caption-spaced">运行控制</span>
           <button className="nav-item" onClick={() => jumpTo('workspace')}><ShieldCheck size={17} /> 来源与权限</button>
           <button className="nav-item" onClick={() => jumpTo('trace')}><TerminalSquare size={17} /> Trace 回放</button>
         </nav>
 
         <div className="sidebar-footer">
+          <div className="sidebar-workspace">
+            <div className="sidebar-workspace-heading"><span>当前工作区</span><span>{runHistory.length} 次运行</span></div>
+            <strong>{report?.project.name || '等待研究对象'}</strong>
+            <span>{report ? `${report.summary.events_count} 个事件 · ${report.evidence.length} 条证据` : '完成一次研究后，这里会显示摘要'}</span>
+          </div>
           <div className="connection-status"><span className="status-pulse" /> API 就绪</div>
           <button className="settings-link" onClick={() => setShowSettings((value) => !value)}>
             <SlidersHorizontal size={15} /> 本地设置
@@ -322,11 +334,12 @@ function App() {
       <main className="main-column">
         <header className="topbar">
           <div>
-            <span className="eyebrow">RESEARCH WORKSPACE / 01</span>
+            <span className="topbar-kicker">Signal Radar / 工作台</span>
             <h1>开源项目情报工作台</h1>
+            <p className="topbar-description">把公开信号整理成可回链、可复盘的研究简报。</p>
           </div>
           <div className="topbar-actions">
-            <span className="live-chip"><span /> LOCAL REPLAY READY</span>
+            <span className="live-chip"><span /> Replay 可用</span>
             <button className="icon-button" title="刷新当前报告" onClick={() => fetchReport().then(setReport).catch(() => setError('报告刷新失败'))}>
               <RefreshCw size={17} />
             </button>
@@ -336,18 +349,24 @@ function App() {
         <section className="brief-section">
           <div className="section-heading">
             <div>
-              <span className="eyebrow eyebrow-accent">RESEARCH BRIEF</span>
-              <h2>你想知道什么？</h2>
+              <span className="eyebrow eyebrow-accent">研究入口</span>
+              <h2>从一个问题开始</h2>
             </div>
-            <span className="section-index">01 / 04</span>
+            <span className="section-note">先解析计划，再决定是否联网采集</span>
           </div>
           <div className="brief-grid">
             <div className="brief-composer">
-              <div className="composer-label"><Sparkles size={15} /> 自然语言研究简报</div>
+              <div className="composer-label"><Sparkles size={15} /> 研究问题</div>
               <textarea value={query} onChange={(event) => { setQuery(event.target.value); setPlan(null); setSelectedSources([]) }} placeholder="例如：分析某个项目最近 30 天的安装问题和社区反馈" />
               <div className="composer-bottom">
                 <div className="composer-hint"><Search size={14} /> 计划解析不会访问网络</div>
                 <button className="secondary-action" onClick={makePlan} disabled={running}>解析计划 <ChevronRight size={15} /></button>
+              </div>
+              <div className="prompt-row">
+                <span>快速开始</span>
+                <button onClick={() => applyPrompt('分析 browser-use/browser-use 最近 30 天的版本变化与安装兼容性')}>版本与兼容性</button>
+                <button onClick={() => applyPrompt('分析 browser-use/browser-use 最近 30 天的社区反馈与高风险问题')}>社区反馈</button>
+                <button onClick={() => applyPrompt('分析 browser-use/browser-use 最近 30 天的维护活跃度与贡献趋势')}>维护活跃度</button>
               </div>
             </div>
             <div className="brief-fields">
@@ -396,7 +415,7 @@ function App() {
 
         <section className="overview-section" id="overview">
           <div className="section-heading">
-            <div><span className="eyebrow">CURRENT SIGNALS</span><h2>项目状态概览</h2></div>
+            <div><span className="eyebrow">状态</span><h2>项目状态概览</h2></div>
             <span className="section-note">{report ? `最近生成于 ${formatTime(report.generated_at)}` : '等待一份报告'}</span>
           </div>
           <div className="metric-grid">
@@ -420,7 +439,7 @@ function App() {
 
         <section className="workspace-section" id="workspace">
           <div className="section-heading">
-            <div><span className="eyebrow eyebrow-accent">RUN MONITOR</span><h2>采集工作台</h2></div>
+            <div><span className="eyebrow eyebrow-accent">运行监控</span><h2>采集工作台</h2></div>
             <div className="workspace-actions">
               {running && activeRunId && <button className="text-action danger-action" onClick={requestCancel} disabled={cancelRequested}><XCircle size={14} /> {cancelRequested ? '取消中' : '取消运行'}</button>}
               {activeRunId && <button className="text-action" onClick={() => { reloadTrace(); jumpTo('trace') }}><TerminalSquare size={14} /> 回放 Trace</button>}
@@ -450,7 +469,7 @@ function App() {
 
         <section className="trace-section" id="trace">
           <div className="section-heading">
-            <div><span className="eyebrow eyebrow-accent">TRACE REPLAY</span><h2>运行轨迹</h2></div>
+            <div><span className="eyebrow eyebrow-accent">Trace 回放</span><h2>运行轨迹</h2></div>
             <div className="trace-heading-meta"><span className="section-note">{activeRunId || '等待运行'}</span><ListFilter size={15} /></div>
           </div>
           <div className="trace-toolbar">
@@ -470,7 +489,7 @@ function App() {
 
         <section className="history-section" id="history">
           <div className="section-heading">
-            <div><span className="eyebrow">PERSISTED RUNS</span><h2>运行历史</h2></div>
+            <div><span className="eyebrow">历史</span><h2>运行历史</h2></div>
             <button className="text-action" onClick={refreshHistory} disabled={historyLoading}><RefreshCw size={14} /> 刷新</button>
           </div>
           <div className="history-list">
@@ -482,7 +501,7 @@ function App() {
 
         <section className="findings-section">
           <div className="section-heading">
-            <div><span className="eyebrow">EVIDENCE LED FINDINGS</span><h2>关键风险信号</h2></div>
+            <div><span className="eyebrow">风险信号</span><h2>关键风险信号</h2></div>
             <button className="text-action" onClick={() => jumpTo('evidence')}>查看完整报告 <ArrowUpRight size={15} /></button>
           </div>
           <div className="findings-list">
@@ -494,7 +513,7 @@ function App() {
 
         <section className="insights-section" id="insights">
           <div className="section-heading">
-            <div><span className="eyebrow">SIGNAL SHAPE</span><h2>主题与趋势</h2></div>
+            <div><span className="eyebrow">分析</span><h2>主题与趋势</h2></div>
             <span className="section-note">按报告中的证据聚合</span>
           </div>
           <div className="insights-grid">
@@ -511,7 +530,7 @@ function App() {
 
         <section className="evidence-section" id="evidence">
           <div className="section-heading">
-            <div><span className="eyebrow eyebrow-accent">TRACEABLE SOURCES</span><h2>最近证据</h2></div>
+            <div><span className="eyebrow eyebrow-accent">证据链</span><h2>最近证据</h2></div>
             <div className="section-heading-actions"><span className="section-note">点击标题打开原文</span><button className="text-action" onClick={exportMarkdown} disabled={!activeRunId}><Download size={14} /> 导出 Markdown</button></div>
           </div>
           <div className="evidence-grid">
