@@ -25,6 +25,20 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(plan.window_days, 30)
         self.assertEqual(plan.sources[:3], ["github", "rss", "hackernews"])
 
+    def test_preserves_explicit_public_urls_for_confirmed_dynamic_collection(self) -> None:
+        plan = build_plan(PlanRequest(
+            query="查看 https://www.csdn.net/article/123，分析登录后可见的安装反馈",
+        ))
+        self.assertEqual(plan.urls, ["https://www.csdn.net/article/123"])
+        self.assertIn("browser_use", plan.sources)
+        self.assertIn("1 个明确页面", plan.explanation)
+
+    def test_drops_private_or_credential_bearing_urls(self) -> None:
+        plan = build_plan(PlanRequest(
+            query="检查 http://127.0.0.1:8000/debug 和 https://user:secret@example.com/post",
+        ))
+        self.assertEqual(plan.urls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

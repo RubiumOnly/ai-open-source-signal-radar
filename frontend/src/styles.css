@@ -98,6 +98,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--sage); box-shado
 .plan-tags { grid-column: 1 / 2; }
 .plan-tags span { padding: 4px 7px; color: var(--forest); border: 1px solid #c6ddd0; background: #e7f1eb; }
 .plan-tags .tag-muted { color: var(--ink-2); border-color: var(--line); background: var(--surface); }
+.plan-urls { display: flex; align-items: flex-start; gap: 6px; grid-column: 1 / 2; min-width: 0; color: var(--sage); font: 10px/1.4 var(--mono); overflow-wrap: anywhere; }
+.plan-urls svg { flex: 0 0 auto; margin-top: 2px; }
 .primary-action { align-self: center; justify-self: end; min-height: 38px; padding: 0 14px; color: #fff; background: var(--forest); font-size: 12px; font-weight: 650; }
 .primary-action:hover, .primary-action:focus-visible { background: var(--forest-2); outline: none; }
 .inline-alert { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px; color: #8c4d43; border-left: 3px solid var(--danger); background: var(--danger-soft); font-size: 12px; }

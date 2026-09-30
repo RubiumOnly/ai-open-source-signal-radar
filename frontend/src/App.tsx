@@ -344,6 +344,7 @@ function App() {
                 {(plan.sources.length ? plan.sources : ['github', 'rss', 'hackernews']).map((source) => <span key={source}>{sourceName(source)}</span>)}
                 {(plan.focus.length ? plan.focus : focusFallback).map((focus) => <span className="tag-muted" key={focus}>{focus}</span>)}
               </div>
+              {plan.urls.length > 0 && <div className="plan-urls"><ArrowUpRight size={13} /> {plan.urls.join(' · ')}</div>}
               <button className="primary-action" onClick={runResearch} disabled={running}>
                 {running ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
                 {running ? '正在采集' : '开始研究'}

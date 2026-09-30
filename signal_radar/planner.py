@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import re
+import ipaddress
+from urllib.parse import urlsplit
 
 from .models import PlanRequest, ResearchPlan
 
@@ -14,6 +16,7 @@ from .models import PlanRequest, ResearchPlan
 _GITHUB_URL = re.compile(r"https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", re.I)
 _REPOSITORY = re.compile(r"(?<![\w.-])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?![\w.-])")
 _WINDOW = re.compile(r"(?:最近|过去|last|past)\s*(\d{1,4})\s*(?:天|日|days?|d)?", re.I)
+_URL = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+", re.I)
 
 _FOCUS_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("安装与兼容性", ("安装", "兼容", "install", "compat")),
@@ -59,6 +62,33 @@ def _focus(query: str) -> list[str]:
     return found or ["版本变化", "社区反馈", "维护活跃度"]
 
 
+def _urls(query: str) -> list[str]:
+    """提取用户明确粘贴的页面 URL，交给后续白名单校验。"""
+
+    urls: list[str] = []
+    for raw in _URL.findall(query):
+        value = raw.rstrip(".,;!?)]}，。；！？）】")
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            if parsed.scheme not in {"http", "https"} or not hostname or parsed.username or parsed.password:
+                continue
+            lowered = hostname.rstrip(".").lower()
+            if lowered in {"localhost", "localhost.localdomain"} or lowered.endswith(".localhost"):
+                continue
+            try:
+                address = ipaddress.ip_address(lowered)
+            except ValueError:
+                address = None
+            if address is not None and (address.is_private or address.is_loopback or address.is_link_local or address.is_reserved):
+                continue
+        except ValueError:
+            continue
+        if value not in urls:
+            urls.append(value)
+    return urls[:20]
+
+
 def _sources(query: str, explicit: list[str]) -> list[str]:
     normalised = [str(item).strip().lower().replace("-", "_") for item in explicit if str(item).strip()]
     if normalised:
@@ -74,9 +104,11 @@ def build_plan(request: PlanRequest) -> ResearchPlan:
     project = _normalise_project(request.project) or _normalise_project(query) or "browser-use/browser-use"
     sources = _sources(query, request.sources)
     focus = _focus(query)
+    urls = _urls(query)
     days = _window_days(query, request.window_days)
+    url_note = f"，包含 {len(urls)} 个明确页面" if urls else ""
     explanation = (
-        f"已识别项目 {project}，时间窗口为最近 {days} 天；"
+        f"已识别项目 {project}，时间窗口为最近 {days} 天{url_note}；"
         f"将优先使用 {', '.join(sources)}，围绕 {', '.join(focus)} 生成证据报告。"
     )
     return ResearchPlan(
@@ -86,6 +118,7 @@ def build_plan(request: PlanRequest) -> ResearchPlan:
         research_mode=request.research_mode,
         focus=focus,
         sources=sources,
+        urls=urls,
         explanation=explanation,
     )
 
