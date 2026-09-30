@@ -36,6 +36,7 @@ const sourceLabels: Record<string, string> = {
   github: 'GitHub',
   github_prs: 'GitHub PR',
   github_discussions: 'GitHub Discussions',
+  github_pr_comments: 'GitHub PR 评论',
   rss: '官方 RSS',
   hackernews: 'Hacker News',
   reddit: 'Reddit',

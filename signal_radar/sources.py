@@ -559,6 +559,109 @@ class GitHubSourceAdapter:
             evidence=evidence,
         )
 
+    def collect_pull_request_comments(
+        self,
+        repository: str = "browser-use/browser-use",
+        *,
+        limit: int = 20,
+        since: datetime | None = None,
+    ) -> SourceFetchResult:
+        """按需读取公开 PR review comments，作为维护反馈信号。"""
+
+        parsed = _normalise_repository(repository)
+        if not parsed:
+            return SourceFetchResult(status=SourceStatus(
+                source="GitHub PR Comments", source_type="community", status="error",
+                access_status="error", detail="repository must be owner/name or a GitHub URL",
+                error="invalid_repository",
+            ))
+        owner, name = parsed
+        if since and since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        bounded_limit = max(1, min(int(limit), self.max_limit))
+        endpoint = f"{self.base_url}/repos/{quote(owner)}/{quote(name)}/pulls/comments?sort=updated&direction=desc&per_page={bounded_limit}"
+        items, status_code, errors, latency, pages, cache_hit = self._request_pages(
+            endpoint,
+            limit=bounded_limit,
+            cache_prefix=f"github:{owner}/{name}:pull-comments",
+            since=since,
+        )
+        articles: list[Article] = []
+        evidence: list[Evidence] = []
+        claims: list[Claim] = []
+        events: list[Event] = []
+        duplicates = 0
+        candidates = 0
+        cache_key = f"github:{owner}/{name}:pull-comments"
+        for item in items:
+            published = _parse_time(item.get("updated_at") or item.get("created_at"))
+            if since and published and published < since:
+                continue
+            url = str(item.get("html_url") or item.get("pull_request_url") or "")
+            body = str(item.get("body") or "").strip()
+            title = f"PR review comment #{item.get('id') or 'unknown'}"
+            article = self._article(
+                key=f"pull-comment:{item.get('id') or url}",
+                url=url,
+                title=title,
+                source="GitHub PR Comments",
+                source_type="community",
+                text=body or title,
+                published=published,
+                tags=["pull_request", "review_comment"],
+            )
+            candidates += 1
+            if self.cache and not self.cache.register_record(cache_key, article.id, article.content_hash or ""):
+                duplicates += 1
+                continue
+            article.author = str((item.get("user") or {}).get("login") or "").strip() or None
+            article.metadata.update({
+                "collector": "github_api",
+                "pull_request_url": item.get("pull_request_url"),
+                "path": item.get("path"),
+                "line": item.get("line"),
+            })
+            sentiment = _classify_feedback(body or title)[1]
+            mapped_article, ev, claim, event = self._analysis(
+                article,
+                body or title,
+                category="pull_request_comment",
+                risk_score=50.0 if sentiment == "negative" else 24.0,
+            )
+            articles.append(mapped_article)
+            evidence.append(ev)
+            claims.append(claim)
+            events.append(event)
+            if len(articles) >= bounded_limit:
+                break
+        errors = [error for error in errors if error]
+        status_name, access_name = _github_status(status_code, bool(errors))
+        detail = f"{len(articles)} records from {owner}/{name} PR review comments"
+        if errors:
+            detail += "; " + "; ".join(errors)[:240]
+        return SourceFetchResult(
+            status=SourceStatus(
+                source="GitHub PR Comments",
+                source_type="community",
+                status=status_name,
+                access_status=access_name,
+                records=len(articles),
+                detail=detail,
+                error="; ".join(errors)[:500] if errors else None,
+                latency_ms=latency,
+                authenticated=bool(self.token),
+                pages=pages,
+                cache_hit=cache_hit if self.cache else False,
+                new_records=len(articles),
+                duplicate_records=duplicates,
+                total_candidates=candidates,
+            ),
+            articles=articles,
+            claims=claims,
+            events=events,
+            evidence=evidence,
+        )
+
     def _release_record(
         self, item: dict[str, Any], *, since: datetime | None
     ) -> tuple[Article | None, Evidence | None, Claim | None, Event | None]:

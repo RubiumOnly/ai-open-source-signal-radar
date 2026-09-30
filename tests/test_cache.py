@@ -141,6 +141,31 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(result.articles[0].metadata["category"], "Q&A")
         self.assertEqual(result.claims[0].claim_type, "discussion")
 
+    def test_github_pull_request_comments_are_opt_in_and_traceable(self) -> None:
+        payload = [{
+            "id": 99,
+            "html_url": "https://github.com/org/repo/pull/4#discussion_r99",
+            "pull_request_url": "https://api.github.com/repos/org/repo/pulls/4",
+            "body": "This change may break the retry path.",
+            "updated_at": "2026-09-29T00:00:00Z",
+            "user": {"login": "reviewer"},
+            "path": "src/retry.py",
+            "line": 42,
+        }]
+
+        def opener(request, timeout):
+            self.assertIn("/pulls/comments?", request.full_url)
+            self.assertGreater(timeout, 0)
+            return _Response(payload)
+
+        result = GitHubSourceAdapter(opener=opener).collect_pull_request_comments(
+            "org/repo", limit=5, since=datetime(2026, 9, 1, tzinfo=timezone.utc)
+        )
+        self.assertEqual(result.status.source, "GitHub PR Comments")
+        self.assertEqual(result.status.records, 1)
+        self.assertEqual(result.articles[0].author, "reviewer")
+        self.assertEqual(result.claims[0].claim_type, "pull_request_comment")
+
 
 if __name__ == "__main__":
     unittest.main()

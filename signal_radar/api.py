@@ -306,6 +306,12 @@ async def _live_report_async(
             jobs.append(("GitHub Discussions", lambda: collect_discussions(repository, limit=payload.limit, since=since)))
         else:
             jobs.append(("GitHub Discussions", lambda: disabled("GitHub Discussions", "community", "GitHub Discussions adapter is not configured")))
+    if "github_pr_comments" in requested_sources or "pull_request_comments" in requested_sources or "pr_comments" in requested_sources:
+        collect_comments = getattr(github, "collect_pull_request_comments", None)
+        if callable(collect_comments):
+            jobs.append(("GitHub PR Comments", lambda: collect_comments(repository, limit=payload.limit, since=since)))
+        else:
+            jobs.append(("GitHub PR Comments", lambda: disabled("GitHub PR Comments", "community", "GitHub PR comment adapter is not configured")))
     if "browser_use" in requested_sources or "browser" in requested_sources or "dynamic" in requested_sources:
         urls = list(payload.urls) or [
             f"https://github.com/{repository}/discussions",
