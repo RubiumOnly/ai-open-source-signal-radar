@@ -8,6 +8,7 @@ import {
   Check,
   ChevronRight,
   Clock3,
+  CircleDot,
   Download,
   FileSearch,
   FolderGit2,
@@ -35,6 +36,8 @@ const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变�
 
 const sourceLabels: Record<string, string> = {
   github: 'GitHub',
+  github_releases: 'GitHub Releases',
+  github_issues: 'GitHub Issues',
   github_prs: 'GitHub PR',
   github_discussions: 'GitHub Discussions',
   github_pr_comments: 'GitHub PR 评论',
@@ -43,6 +46,14 @@ const sourceLabels: Record<string, string> = {
   reddit: 'Reddit',
   stackoverflow: 'Stack Overflow',
   browser_use: '动态网页',
+  official_blog: '官方博客',
+}
+
+const sourceTypeLabels: Record<string, string> = {
+  first_party: '一手来源',
+  developer_feedback: '开发者反馈',
+  community: '社区反馈',
+  dynamic: '动态页面',
 }
 
 const statusLabels: Record<string, string> = {
@@ -56,10 +67,12 @@ const statusLabels: Record<string, string> = {
   error: '采集失败',
   unavailable: '暂不可用',
   metadata_only: '仅元数据',
+  running: '运行中',
 }
 
 const focusFallback = ['版本变化', '社区反馈', '维护活跃度']
 type TraceFilter = 'all' | 'collect' | 'done'
+type SectionId = 'overview' | 'workspace' | 'trace' | 'history' | 'findings' | 'insights' | 'evidence'
 
 function formatDate(value?: string | null) {
   if (!value) return '暂无时间'
@@ -75,6 +88,10 @@ function formatTime(value?: string | null) {
 
 function sourceName(source: string) {
   return sourceLabels[source] ?? source
+}
+
+function sourceTypeName(sourceType: string) {
+  return sourceTypeLabels[sourceType] ?? sourceType
 }
 
 function riskTone(level?: string) {
@@ -114,13 +131,45 @@ function App() {
   const [capabilities, setCapabilities] = useState<CapabilitiesResponse | null>(null)
   const [traceFilter, setTraceFilter] = useState<TraceFilter>('all')
   const [cancelRequested, setCancelRequested] = useState(false)
+  const [activeSection, setActiveSection] = useState<SectionId>('overview')
+  const [reportLoading, setReportLoading] = useState(true)
+  const [selectingRunId, setSelectingRunId] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchReport().then(setReport).catch(() => setError('API 尚未启动，运行 Replay 后即可加载报告。'))
+    let mounted = true
+    fetchReport().then((value) => {
+      if (!mounted) return
+      setReport(value)
+      setActiveRunId(value.run_id ?? null)
+    }).catch(() => { if (mounted) setError('API 尚未启动，运行 Replay 后即可加载报告。') }).finally(() => {
+      if (mounted) setReportLoading(false)
+    })
     fetchMetrics().then(setMetrics).catch(() => undefined)
     fetchCapabilities().then(setCapabilities).catch(() => undefined)
     refreshHistory()
+    return () => { mounted = false }
   }, [])
+
+  useEffect(() => {
+    const sectionIds: SectionId[] = ['overview', 'workspace', 'trace', 'history', 'findings', 'insights', 'evidence']
+    const sections = sectionIds.map((id) => document.getElementById(id)).filter(Boolean) as HTMLElement[]
+    if (!sections.length || !('IntersectionObserver' in window)) return
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0]
+      if (visible) setActiveSection(visible.target.id as SectionId)
+    }, { rootMargin: '-132px 0px -52% 0px', threshold: [0.05, 0.25, 0.5] })
+    sections.forEach((section) => observer.observe(section))
+    return () => observer.disconnect()
+  }, [reportLoading])
+
+  useEffect(() => {
+    if (!showSettings) return
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setShowSettings(false)
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [showSettings])
 
   const latestEvents = useMemo(() => [...events].slice(-7).reverse(), [events])
   const traceEvents = useMemo(() => {
@@ -176,6 +225,8 @@ function App() {
     setCancelRequested(false)
     setError('')
     setEvents([])
+    setActiveSection('workspace')
+    jumpTo('workspace')
     try {
       const started = await startRun(confirmedPlan, runMode)
       setActiveRunId(started.run.run_id)
@@ -201,6 +252,8 @@ function App() {
     setCancelRequested(false)
     setError('')
     setEvents([])
+    setActiveSection('workspace')
+    jumpTo('workspace')
     try {
       const started = await followUp(activeRunId, { query: followUpQuery.trim(), mode: runMode })
       setActiveRunId(started.run.run_id)
@@ -259,6 +312,7 @@ function App() {
 
   async function selectHistoryRun(runId: string) {
     setError('')
+    setSelectingRunId(runId)
     try {
       const selected = await fetchRun(runId)
       setActiveRunId(runId)
@@ -267,6 +321,8 @@ function App() {
       jumpTo('workspace')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '历史运行加载失败')
+    } finally {
+      setSelectingRunId(null)
     }
   }
 
@@ -285,8 +341,19 @@ function App() {
     })
   }
 
-  function jumpTo(id: string) {
+  function jumpTo(id: SectionId) {
+    setActiveSection(id)
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  async function refreshReportNow() {
+    try {
+      const next = await fetchReport()
+      setReport(next)
+      setActiveRunId(next.run_id ?? null)
+    } catch {
+      setError('报告刷新失败，请检查 API 是否仍在运行。')
+    }
   }
 
   function applyPrompt(prompt: string) {
@@ -298,6 +365,7 @@ function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">跳到主要内容</a>
       <aside className="sidebar">
         <div className="brand-lockup">
           <div className="brand-mark"><Radar size={19} /></div>
@@ -309,13 +377,13 @@ function App() {
 
         <nav className="nav-group" aria-label="主导航">
           <span className="nav-caption">研究工作台</span>
-          <button className="nav-item nav-item-active" onClick={() => jumpTo('overview')}><LayoutDashboard size={17} /> 总览 <span className="nav-dot" /></button>
-          <button className="nav-item" onClick={() => jumpTo('history')}><FileSearch size={17} /> 运行历史</button>
-          <button className="nav-item" onClick={() => jumpTo('evidence')}><BookOpen size={17} /> 证据库</button>
-          <button className="nav-item" onClick={() => jumpTo('insights')}><BarChart3 size={17} /> 主题趋势</button>
+          <button className={`nav-item ${activeSection === 'overview' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('overview')} aria-current={activeSection === 'overview' ? 'page' : undefined}><LayoutDashboard size={17} /> 总览 {activeSection === 'overview' && <span className="nav-dot" />}</button>
+          <button className={`nav-item ${activeSection === 'history' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('history')} aria-current={activeSection === 'history' ? 'page' : undefined}><FileSearch size={17} /> 运行历史 {activeSection === 'history' && <span className="nav-dot" />}</button>
+          <button className={`nav-item ${activeSection === 'evidence' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('evidence')} aria-current={activeSection === 'evidence' ? 'page' : undefined}><BookOpen size={17} /> 证据库 {activeSection === 'evidence' && <span className="nav-dot" />}</button>
+          <button className={`nav-item ${activeSection === 'insights' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('insights')} aria-current={activeSection === 'insights' ? 'page' : undefined}><BarChart3 size={17} /> 主题趋势 {activeSection === 'insights' && <span className="nav-dot" />}</button>
           <span className="nav-caption nav-caption-spaced">运行控制</span>
-          <button className="nav-item" onClick={() => jumpTo('workspace')}><ShieldCheck size={17} /> 来源与权限</button>
-          <button className="nav-item" onClick={() => jumpTo('trace')}><TerminalSquare size={17} /> Trace 回放</button>
+          <button className={`nav-item ${activeSection === 'workspace' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('workspace')} aria-current={activeSection === 'workspace' ? 'page' : undefined}><ShieldCheck size={17} /> 来源与权限 {activeSection === 'workspace' && <span className="nav-dot" />}</button>
+          <button className={`nav-item ${activeSection === 'trace' ? 'nav-item-active' : ''}`} onClick={() => jumpTo('trace')} aria-current={activeSection === 'trace' ? 'page' : undefined}><TerminalSquare size={17} /> Trace 回放 {activeSection === 'trace' && <span className="nav-dot" />}</button>
         </nav>
 
         <div className="sidebar-footer">
@@ -325,13 +393,13 @@ function App() {
             <span>{report ? `${report.summary.events_count} 个事件 · ${report.evidence.length} 条证据` : '完成一次研究后，这里会显示摘要'}</span>
           </div>
           <div className="connection-status"><span className="status-pulse" /> API 就绪</div>
-          <button className="settings-link" onClick={() => setShowSettings((value) => !value)}>
+          <button className="settings-link" onClick={() => setShowSettings((value) => !value)} aria-expanded={showSettings} aria-controls="settings-dialog">
             <SlidersHorizontal size={15} /> 本地设置
           </button>
         </div>
       </aside>
 
-      <main className="main-column">
+      <main className="main-column" id="main-content">
         <header className="topbar">
           <div>
             <span className="topbar-kicker">Signal Radar / 工作台</span>
@@ -339,8 +407,8 @@ function App() {
             <p className="topbar-description">把公开信号整理成可回链、可复盘的研究简报。</p>
           </div>
           <div className="topbar-actions">
-            <span className="live-chip"><span /> Replay 可用</span>
-            <button className="icon-button" title="刷新当前报告" onClick={() => fetchReport().then(setReport).catch(() => setError('报告刷新失败'))}>
+            <span className={`live-chip ${running ? 'live-chip-running' : report ? 'live-chip-ready' : ''}`}><span /> {running ? '正在运行' : report ? '报告已就绪' : 'Replay 可用'}</span>
+            <button className="icon-button" title="刷新当前报告" aria-label="刷新当前报告" onClick={refreshReportNow}>
               <RefreshCw size={17} />
             </button>
           </div>
@@ -410,13 +478,17 @@ function App() {
               </button>
             </div>
           )}
-          {error && <div className="inline-alert"><AlertTriangle size={16} /> {error}</div>}
+          {report && <div className="report-context" aria-label="当前报告上下文">
+            <div className="report-context-main"><span className="report-context-icon"><CircleDot size={16} /></span><div><span className="eyebrow">当前报告</span><strong>{report.project.repository}</strong><span>{report.project.name} · 最近 {report.window_days} 天</span></div></div>
+            <div className="report-context-stats"><span><strong>{report.evidence.length}</strong> 条证据</span><span><strong>{report.summary.source_count}</strong> 个来源</span><span><strong>{Math.round(report.summary.coverage_pct)}%</strong> 覆盖</span></div>
+          </div>}
+          {error && <div className="inline-alert" role="alert"><AlertTriangle size={16} /> <span>{error}</span></div>}
         </section>
 
         <section className="overview-section" id="overview">
           <div className="section-heading">
             <div><span className="eyebrow">状态</span><h2>项目状态概览</h2></div>
-            <span className="section-note">{report ? `最近生成于 ${formatTime(report.generated_at)}` : '等待一份报告'}</span>
+            <span className="section-note">{reportLoading ? '正在读取报告' : report ? `最近生成于 ${formatTime(report.generated_at)}` : '等待一份报告'}</span>
           </div>
           <div className="metric-grid">
             <div className={`metric-card metric-card-primary tone-${riskTone(report?.summary.risk_level)}`}>
@@ -450,7 +522,7 @@ function App() {
             <div className="activity-panel">
               <div className="panel-heading"><span>结构化运行事件</span><span className="panel-count">{events.length} events</span></div>
               {latestEvents.length ? latestEvents.map((event) => <RunEventRow event={event} key={event.id} />) : (
-                <div className="empty-panel"><Radar size={23} /><span>开始一次研究后，这里会显示来源状态、记录数量和预算事件。</span></div>
+                <div className={`empty-panel ${running ? 'empty-panel-running' : ''}`}><Radar size={23} /> <span>{running ? '正在等待来源返回，事件会实时出现在这里。' : '开始一次研究后，这里会显示来源状态、记录数量和预算事件。'}</span></div>
               )}
             </div>
             <div className="sources-panel">
@@ -493,7 +565,7 @@ function App() {
             <button className="text-action" onClick={refreshHistory} disabled={historyLoading}><RefreshCw size={14} /> 刷新</button>
           </div>
           <div className="history-list">
-            {runHistory.length ? runHistory.map((run) => <HistoryRow key={run.run_id} run={run} active={run.run_id === activeRunId} onSelect={selectHistoryRun} />) : (
+            {runHistory.length ? runHistory.map((run) => <HistoryRow key={run.run_id} run={run} active={run.run_id === activeRunId} loading={run.run_id === selectingRunId} onSelect={selectHistoryRun} />) : (
               <div className="empty-wide"><Clock3 size={21} /><span>{historyLoading ? '正在读取历史运行…' : '完成一次运行后，这里会保留可回放记录。'}</span></div>
             )}
           </div>
@@ -542,18 +614,20 @@ function App() {
         <footer className="footer"><span>Signal Radar / evidence first</span><span>公开来源优先 · 授权浏览 · 可审计运行</span></footer>
       </main>
 
-      {showSettings && <div className="settings-drawer">
-        <div className="drawer-heading"><span><KeyRound size={16} /> 本地 API 设置</span><button className="icon-button" title="关闭" onClick={() => setShowSettings(false)}><XCircle size={17} /></button></div>
+      {showSettings && <div className="settings-layer" onClick={() => setShowSettings(false)}>
+        <aside className="settings-drawer" id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}>
+        <div className="drawer-heading"><span id="settings-title"><KeyRound size={16} /> 本地 API 设置</span><button className="icon-button" title="关闭设置" aria-label="关闭设置" onClick={() => setShowSettings(false)}><XCircle size={17} /></button></div>
         <label><span>Bearer Token（只保存在当前浏览器）</span><input type="password" value={token} onChange={(event) => saveToken(event.target.value)} placeholder="共享 API 启用认证时填写" /></label>
-        {capabilities && <div className="capability-list">
+        {capabilities ? <div className="capability-list">
           <div><span>Browser Use</span><strong>{capabilities.browser_use.available ? '可运行' : '未就绪'}</strong></div>
           <div><span>状态</span><strong>{capabilities.browser_use.reason}</strong></div>
           <div><span>授权会话</span><strong>{capabilities.browser_use.authorized_session ? '已明确授权' : '未启用'}</strong></div>
           <div><span>域名白名单</span><strong>{capabilities.browser_use.allowed_domains.join(', ') || '未配置'}</strong></div>
           <div><span>增量缓存</span><strong>{capabilities.cache_enabled ? '已启用' : '已关闭'}</strong></div>
           <div><span>API 认证</span><strong>{capabilities.api_auth_enabled ? '已启用' : '本地开放'}</strong></div>
-        </div>}
+        </div> : <div className="capability-loading"><LoaderCircle className="spin" size={16} /> 正在读取能力状态</div>}
         <p>Token 不会写入代码或 URL。Replay 本地运行通常不需要填写。</p>
+        </aside>
       </div>}
     </div>
   )
@@ -611,17 +685,17 @@ function SourceRow({ source }: { source: SourceStatus }) {
     source.pages && source.pages > 1 ? `${source.pages} 页` : '',
     source.cache_hit ? '缓存命中' : '',
   ].filter(Boolean).join(' · ')
-  return <div className="source-row"><div className={`source-signal source-signal-${statusTone(status)}`} /><div className="source-name"><strong>{sourceName(source.source)}</strong><span>{source.source_type} · {metrics}</span></div><span className={`source-status source-status-${statusTone(status)}`}>{statusLabels[status] ?? status}</span><span className="source-count">{source.records}</span></div>
+  return <div className="source-row"><div className={`source-signal source-signal-${statusTone(status)}`} /><div className="source-name"><strong>{sourceName(source.source)}</strong><span>{sourceTypeName(source.source_type)} · {metrics}</span></div><span className={`source-status source-status-${statusTone(status)}`}>{statusLabels[status] ?? status}</span><span className="source-count">{source.records}</span></div>
 }
 
-function HistoryRow({ run, active, onSelect }: { run: Run; active: boolean; onSelect: (runId: string) => void }) {
+function HistoryRow({ run, active, loading, onSelect }: { run: Run; active: boolean; loading: boolean; onSelect: (runId: string) => void }) {
   const tone = run.status === 'completed' ? 'ok' : run.status === 'partial' ? 'warn' : run.status === 'failed' || run.status === 'cancelled' ? 'danger' : 'warn'
-  return <button className={`history-row ${active ? 'history-row-active' : ''}`} onClick={() => onSelect(run.run_id)}>
+  return <button className={`history-row ${active ? 'history-row-active' : ''}`} onClick={() => onSelect(run.run_id)} disabled={loading} aria-busy={loading}>
     <span className={`history-dot history-dot-${tone}`} />
     <span className="history-main"><strong>{run.subject || '未命名项目'}</strong><span>{run.run_id} · {run.mode} · {run.window_days} 天</span></span>
     <span className={`history-status history-status-${tone}`}>{statusLabels[run.status] ?? run.status}</span>
     <span className="history-date">{formatDate(run.completed_at || run.started_at)}</span>
-    <ChevronRight size={15} />
+    {loading ? <LoaderCircle className="spin" size={15} /> : <ChevronRight size={15} />}
   </button>
 }
 
@@ -630,7 +704,7 @@ function FindingRow({ event }: { event: Event }) {
 }
 
 function EvidenceCard({ evidence }: { evidence: Report['evidence'][number] }) {
-  return <article className="evidence-card"><div className="evidence-card-top"><span className="evidence-source">{evidence.source}</span><span className="evidence-confidence">{Math.round(evidence.confidence * 100)}%</span></div><a href={evidence.url} target="_blank" rel="noreferrer"><strong>{evidence.title || '未命名证据'}</strong><ArrowUpRight size={14} /></a><p>{evidence.quote || '只有元数据，暂无可引用正文。'}</p><div className="evidence-meta"><span>{formatDate(evidence.published_at)}</span><span>{evidence.evidence_level}</span></div></article>
+  return <article className="evidence-card"><div className="evidence-card-top"><span className="evidence-source">{sourceName(evidence.source)}</span><span className="evidence-confidence">{Math.round(evidence.confidence * 100)}%</span></div><a href={evidence.url} target="_blank" rel="noreferrer"><strong>{evidence.title || '未命名证据'}</strong><ArrowUpRight size={14} /></a><p>{evidence.quote || '只有元数据，暂无可引用正文。'}</p><div className="evidence-meta"><span>{formatDate(evidence.published_at)}</span><span>{evidence.evidence_level}</span></div></article>
 }
 
 export default App
