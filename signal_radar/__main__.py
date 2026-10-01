@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture", type=Path, help="JSON report fixture for replay mode")
     parser.add_argument("--project", default="browser-use/browser-use", help="GitHub owner/name")
     parser.add_argument("--days", type=int, default=7, help="Analysis window in days")
-    parser.add_argument("--limit", type=int, default=20, help="Maximum records per source")
+    parser.add_argument("--limit", type=int, default=100, help="Maximum records per source (1-500)")
     parser.add_argument("--max-steps", type=int, default=None, help="Browser Use step budget (1-40)")
     parser.add_argument("--timeout-seconds", type=float, default=None, help="Live run timeout budget")
     parser.add_argument(
@@ -101,7 +101,7 @@ def _browser_adapter(args: argparse.Namespace) -> BrowserUseSourceAdapter:
 def _request_from_args(args: argparse.Namespace, *, run_id: str | None = None) -> RunRequest:
     """Build one bounded request shared by one-shot and scheduled CLI modes."""
 
-    sources = ["github", "rss", "hackernews", "reddit", "stackoverflow", "browser_use"] if args.source == "all" else [args.source]
+    sources = ["github", "github_prs", "github_discussions", "github_pr_comments", "rss", "hackernews", "reddit", "stackoverflow", "browser_use"] if args.source == "all" else [args.source]
     return RunRequest(
         mode=args.mode,
         project=args.project,
@@ -134,7 +134,7 @@ def _scheduled_cli(args: argparse.Namespace) -> int:
     )
     history = HistoryStore(os.getenv("SIGNAL_RADAR_HISTORY_DB") or "data/runs.sqlite3")
     cache = SourceCache(os.getenv("SIGNAL_RADAR_CACHE_DB") or DEFAULT_CACHE_PATH) if _env_flag("SIGNAL_RADAR_CACHE_ENABLED", True) else None
-    github = GitHubSourceAdapter(cache=cache, max_pages=_env_int("SIGNAL_RADAR_GITHUB_MAX_PAGES", 4, 1, 20))
+    github = GitHubSourceAdapter(cache=cache, max_pages=_env_int("SIGNAL_RADAR_GITHUB_MAX_PAGES", 10, 1, 20))
     browser = _browser_adapter(args)
     rss = RSSSourceAdapter(
         feed_urls=tuple(item.strip() for item in os.getenv("SIGNAL_RADAR_RSS_FEEDS", "").split(",") if item.strip()),
@@ -142,21 +142,24 @@ def _scheduled_cli(args: argparse.Namespace) -> int:
     )
     hackernews = HackerNewsSourceAdapter(
         timeout=float(_env_int("SIGNAL_RADAR_HACKERNEWS_TIMEOUT", 8, 1, 60)),
-        max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 50, 1, 100),
-        max_pages=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_PAGES", 4, 1, 20),
+        max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 500, 1, 500),
+        max_pages=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_PAGES", 10, 1, 20),
         cache=cache,
     )
     reddit = RedditSourceAdapter(
         timeout=float(_env_int("SIGNAL_RADAR_REDDIT_TIMEOUT", 8, 1, 60)),
-        max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 50, 1, 100),
-        max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 4, 1, 20),
+        max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 500, 1, 500),
+        max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 10, 1, 20),
+        client_id=os.getenv("SIGNAL_RADAR_REDDIT_CLIENT_ID"),
+        client_secret=os.getenv("SIGNAL_RADAR_REDDIT_CLIENT_SECRET"),
+        user_agent=os.getenv("SIGNAL_RADAR_REDDIT_USER_AGENT"),
         cache=cache,
     )
     stackoverflow = StackOverflowSourceAdapter(
         site=os.getenv("SIGNAL_RADAR_STACKEXCHANGE_SITE", "stackoverflow"),
         timeout=float(_env_int("SIGNAL_RADAR_STACKEXCHANGE_TIMEOUT", 8, 1, 60)),
-        max_limit=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_LIMIT", 50, 1, 100),
-        max_pages=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES", 4, 1, 20),
+        max_limit=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_LIMIT", 500, 1, 500),
+        max_pages=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES", 10, 1, 20),
         cache=cache,
     )
 
@@ -232,8 +235,8 @@ def _scheduled_cli(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.days < 1 or args.limit < 1:
-        raise SystemExit("--days and --limit must be positive")
+    if args.days < 1 or not 1 <= args.limit <= 500:
+        raise SystemExit("--days must be positive and --limit must be between 1 and 500")
     if args.max_steps is not None and not 1 <= args.max_steps <= 40:
         raise SystemExit("--max-steps must be between 1 and 40")
     if args.timeout_seconds is not None and not 0 < args.timeout_seconds <= 900:
@@ -251,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         report = load_fixture_report(args.fixture)
         report = report.model_copy(update={"run_id": run_id, "window_days": args.days})
     else:
-        sources = ["github", "rss", "hackernews", "reddit", "stackoverflow", "browser_use"] if args.source == "all" else [args.source]
+        sources = ["github", "github_prs", "github_discussions", "github_pr_comments", "rss", "hackernews", "reddit", "stackoverflow", "browser_use"] if args.source == "all" else [args.source]
         request = RunRequest(
             mode="live",
             project=args.project,
@@ -273,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_id=run_id,
                 github=GitHubSourceAdapter(
                     cache=cache,
-                    max_pages=_env_int("SIGNAL_RADAR_GITHUB_MAX_PAGES", 4, 1, 20),
+        max_pages=_env_int("SIGNAL_RADAR_GITHUB_MAX_PAGES", 10, 1, 20),
                 ),
                 browser=_browser_adapter(args),
                 rss=RSSSourceAdapter(
@@ -286,21 +289,24 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 hackernews=HackerNewsSourceAdapter(
                     timeout=float(_env_int("SIGNAL_RADAR_HACKERNEWS_TIMEOUT", 8, 1, 60)),
-                    max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 50, 1, 100),
-                    max_pages=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_PAGES", 4, 1, 20),
+                    max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 500, 1, 500),
+                    max_pages=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_PAGES", 10, 1, 20),
                     cache=cache,
                 ),
                 reddit=RedditSourceAdapter(
                     timeout=float(_env_int("SIGNAL_RADAR_REDDIT_TIMEOUT", 8, 1, 60)),
-                    max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 50, 1, 100),
-                    max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 4, 1, 20),
+                    max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 500, 1, 500),
+                    max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 10, 1, 20),
+                    client_id=os.getenv("SIGNAL_RADAR_REDDIT_CLIENT_ID"),
+                    client_secret=os.getenv("SIGNAL_RADAR_REDDIT_CLIENT_SECRET"),
+                    user_agent=os.getenv("SIGNAL_RADAR_REDDIT_USER_AGENT"),
                     cache=cache,
                 ),
                 stackoverflow=StackOverflowSourceAdapter(
                     site=os.getenv("SIGNAL_RADAR_STACKEXCHANGE_SITE", "stackoverflow"),
                     timeout=float(_env_int("SIGNAL_RADAR_STACKEXCHANGE_TIMEOUT", 8, 1, 60)),
-                    max_limit=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_LIMIT", 50, 1, 100),
-                    max_pages=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES", 4, 1, 20),
+                    max_limit=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_LIMIT", 500, 1, 500),
+                    max_pages=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES", 10, 1, 20),
                     cache=cache,
                 ),
             )

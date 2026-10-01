@@ -25,25 +25,30 @@ Signal Radar 汇总 GitHub 版本与开发者反馈、公开技术文章及社�
 
 ## 真实 Live 运行
 
-下面的截图来自 **2026-10-01 的真实 Live API 运行**，不是 fixture 或静态演示：
+下面的截图来自 **2026-10-01 的真实 Live 运行**，不是 fixture 或静态演示：
 
-- 运行 ID：`run-b88f6a708f9c`
+- 运行方式：结构化 API + Browser Use 只读动态页面
 - 项目：`browser-use/browser-use`
-- 时间窗口：30 天
-- 状态：`completed`
-- 来源：GitHub、GitHub Pull Requests、GitHub PR review comments、GitHub Discussions、Stack Overflow
-- 结果：38 条证据、38 个事件、8 个主题、100% 来源覆盖
-- 采集质量：16 页、平均来源延迟约 3206 ms、P95 约 6982 ms、20 条新增、18 条重复
+- 时间窗口：365 天
+- 单来源上限：100 条；Browser Use 动态页面上限受 20 条和步数预算约束
+- 结果：396 条证据、396 个事件、9 个来源、77.8% 来源覆盖
+- 采集质量：10 页、平均来源延迟约 3042 ms、P95 约 15052 ms、395 条新增、0 条重复
 
 | 来源 | 记录 | 页数 | 延迟 | 增量结果 |
 | --- | ---: | ---: | ---: | --- |
-| GitHub Releases / Issues | 8 | 6 | 6982 ms | 8 条重复，缓存命中 |
-| GitHub Pull Requests | 10 | 4 | 3895 ms | 10 条新增 |
-| GitHub PR review comments | 10 | 4 | 3469 ms | 10 条新增 |
-| GitHub Discussions | 0 | 1 | 839 ms | 公开接口无命中 |
-| Stack Overflow | 10 | 1 | 848 ms | 10 条重复 |
+| Browser Use 动态页面 | 1 | 1 | 15052 ms | 真实只读页面摘录 |
+| GitHub Releases / Issues | 64 | 2 | 2206 ms | 64 条新增 |
+| GitHub Pull Requests | 100 | 1 | 2246 ms | 100 条新增 |
+| GitHub PR review comments | 100 | 1 | 1330 ms | 100 条新增 |
+| GitHub Discussions | 31 | 1 | 1629 ms | 31 条新增 |
+| Hacker News | 0 | 1 | 619 ms | 公开 API 在窗口内无命中 |
+| RSS / Atom | 0 | 1 | — | 未配置 feed，明确标记 `not_configured` |
+| Reddit | 0 | 1 | 521 ms | 公共 JSON 返回 403，保留 OAuth 配置提示 |
+| Stack Overflow | 100 | 1 | 734 ms | 100 条新增 |
 
 ![Signal Radar 真实 Live 工作台首屏](docs/images/signal-radar-workbench-desktop.png)
+
+截图展示的是本地真实 Live 工作台界面；统计表来自本次扩展验证轮次，截图资产保留同一产品流程的可视化证据。
 
 <details>
 <summary>查看真实 Live 全流程长截图</summary>
@@ -52,7 +57,7 @@ Signal Radar 汇总 GitHub 版本与开发者反馈、公开技术文章及社�
 
 </details>
 
-这次运行使用了公开 API 来源；GitHub Discussions 在该时间窗口返回 0 条，因此界面保留了真实的 0 结果。Browser Use 是独立的可选动态路径，本次没有启用它；DeepSeek Key 也不会被误认为参与了这条确定性 API 采集链路。动态页面任务单独启用 Browser Use 后才会调用配置的模型。
+这次运行同时启用了公开 API 与 Browser Use。Browser Use 访问了白名单内的公开 GitHub Issue，返回 1 条可回链摘录；RSS 未配置、Reddit 被访问策略阻断、Hacker News 无命中，都在来源状态中如实保留。结构化来源不需要模型 Key，Browser Use 才调用配置的 DeepSeek 模型。
 
 ## 核心能力
 
@@ -67,8 +72,6 @@ Signal Radar 汇总 GitHub 版本与开发者反馈、公开技术文章及社�
 | 定时监控 | 显式启动、限定间隔与次数、状态查询和停止，每次运行写入历史 |
 
 ## 功能状态
-
-GitHub 会将 `[x]` 渲染为绿色完成标记，将 `[ ]` 渲染为空白框。以下清单按产品模块组织，空白项表示规划状态，不代表固定的长期承诺。
 
 ### 研究计划与采集
 
@@ -109,7 +112,7 @@ GitHub 会将 `[x]` 渲染为绿色完成标记，将 `[ ]` 渲染为空白框�
 | GitHub | Releases、Issues；按需 PR、Discussions、PR review comments | 公开 API，Token 可提高配额 |
 | RSS / Atom | 官方博客、更新日志、技术文章 | 配置可访问的 feed |
 | Hacker News | Algolia 索引中的公开帖子与评论 | 公共 API |
-| Reddit | 公开帖子及可用内容 | 公共 JSON，可能受限流或访问策略影响 |
+| Reddit | 公开帖子及可用内容 | 默认公共 JSON；403 时可配置只读 OAuth client credentials |
 | Stack Exchange | 按需查询 Stack Overflow 等站点的技术问答 | 公共 API，有配额与 backoff |
 | Browser Use | 用户指定的动态页面，或显式授权后的本地会话 | 可选依赖、模型 Key、双开关和域名白名单 |
 
@@ -190,10 +193,10 @@ Docker 配置、旧版静态回退入口和故障排查见[使用指南](docs/US
 
 公开 API 来源与 Browser Use 的前提不同：**GitHub、RSS 等结构化来源不需要模型 Key**；动态浏览器路径才需要模型配置。
 
-公开 GitHub 来源示例：
+公开 API 来源示例（每个来源最多 100 条；提高 `--limit` 可扩展到 500 条，受分页、配额和时间窗口限制）：
 
 ```sh
-python -m signal_radar --mode live --project browser-use/browser-use --source github --days 30 --limit 20
+python -m signal_radar --mode live --project browser-use/browser-use --source github --days 30 --limit 100
 ```
 
 需要动态网页时，先安装可选依赖：

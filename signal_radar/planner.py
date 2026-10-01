@@ -111,7 +111,9 @@ def _sources(query: str, explicit: list[str]) -> list[str]:
         return list(dict.fromkeys(normalised))[:8]
     lowered = query.lower()
     selected = [name for name, terms in _SOURCE_ALIASES if any(term.lower() in lowered for term in terms)]
-    defaults = ["github", "rss", "hackernews"]
+    # 默认展示所有结构化只读来源。没有配置 RSS 或被站点策略阻断时，
+    # 运行仍会保留明确状态并给出配置提示，而不是悄悄缩减来源范围。
+    defaults = ["github", "rss", "hackernews", "reddit", "stackoverflow"]
     return list(dict.fromkeys(defaults + selected))[:8]
 
 

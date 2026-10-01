@@ -152,6 +152,9 @@ h2 { margin-top: 7px; color: var(--ink); font: 650 22px/1.28 var(--display); let
 .brief-fields { display: grid; align-content: start; gap: 17px; padding: 22px 20px; background: var(--surface-muted); }
 .brief-fields label, .settings-drawer label { display: grid; gap: 8px; }
 .brief-fields label > span, .settings-drawer label > span { color: var(--ink-3); font: 10px/1.2 var(--mono); letter-spacing: .04em; }
+.source-config { display: grid; gap: 12px; padding-top: 2px; border-top: 1px solid var(--line); }
+.source-config summary { padding-top: 12px; cursor: pointer; color: var(--ink-2); font: 10px/1.2 var(--mono); }
+.source-config textarea { width: 100%; min-height: 54px; padding: 9px 10px; resize: vertical; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--ink); background: var(--surface); font-size: 11px; line-height: 1.45; outline: none; }
 input, select { width: 100%; height: 39px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--ink); background: var(--surface); outline: none; }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(92, 138, 114, .14); }
 .input-with-icon { display: flex; align-items: center; gap: 7px; height: 39px; padding-left: 10px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--accent); background: var(--surface); }

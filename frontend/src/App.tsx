@@ -33,7 +33,7 @@ import {
   TerminalSquare,
   XCircle,
 } from 'lucide-react'
-import type { Annotation, AnnotationLabel, CapabilitiesResponse, Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, SchedulerRequest, SchedulerState, SourceStatus } from './types'
+import type { Annotation, AnnotationLabel, CapabilitiesResponse, Event, MetricsResponse, Report, ResearchMode, ResearchPlan, Run, RunEvent, RunMode, RunOptions, SchedulerRequest, SchedulerState, SourceStatus } from './types'
 import { cancelRun, createAnnotation, createPlan, fetchAnnotationExport, fetchAnnotations, fetchCapabilities, fetchMarkdown, fetchMetrics, fetchReport, fetchRun, fetchRuns, fetchSchedule, fetchTrace, followUp, startRun, startSchedule, stopSchedule, streamRun } from './lib/api'
 
 const initialQuery = '分析 browser-use/browser-use 最近 30 天的版本变化、安装兼容性和社区反馈'
@@ -70,6 +70,7 @@ const statusLabels: Record<string, string> = {
   blocked: '访问受阻',
   rate_limited: '触发限流',
   disabled: '未启用',
+  not_configured: '未配置',
   error: '采集失败',
   unavailable: '暂不可用',
   metadata_only: '仅元数据',
@@ -77,6 +78,7 @@ const statusLabels: Record<string, string> = {
 }
 
 const focusFallback = ['版本变化', '社区反馈', '维护活跃度']
+const sourceOptions = ['github', 'github_prs', 'github_discussions', 'github_pr_comments', 'rss', 'hackernews', 'reddit', 'stackoverflow', 'browser_use']
 type TraceFilter = 'all' | 'collect' | 'done'
 type SectionId = 'overview' | 'workspace' | 'trace' | 'history' | 'findings' | 'insights' | 'evidence'
 type HistoryFilter = 'all' | 'completed' | 'partial' | 'attention'
@@ -179,11 +181,21 @@ function sourceStatus(source: SourceStatus) {
   return source.status === 'ok' && source.access_status !== 'public' ? source.access_status : source.status
 }
 
+function splitValues(value: string) {
+  return [...new Set(value.split(/[\n,，]/).map((item) => item.trim()).filter(Boolean))]
+}
+
 function App() {
   const [query, setQuery] = useState(initialQuery)
   const [project, setProject] = useState('')
   const [researchMode, setResearchMode] = useState<ResearchMode>('standard')
   const [runMode, setRunMode] = useState<RunMode>('replay')
+  const [recordLimit, setRecordLimit] = useState(100)
+  const [feedUrls, setFeedUrls] = useState('')
+  const [communityQuery, setCommunityQuery] = useState('')
+  const [redditQuery, setRedditQuery] = useState('')
+  const [stackoverflowQuery, setStackoverflowQuery] = useState('')
+  const [browserUrls, setBrowserUrls] = useState('')
   const [plan, setPlan] = useState<ResearchPlan | null>(null)
   const [selectedSources, setSelectedSources] = useState<string[]>([])
   const [report, setReport] = useState<Report | null>(null)
@@ -341,8 +353,12 @@ function App() {
         research_mode: nextPlan.research_mode,
         focus: nextPlan.focus,
         sources: selectedSources.length ? selectedSources : nextPlan.sources,
-        urls: nextPlan.urls,
-        limit: 20,
+        urls: [...new Set([...nextPlan.urls, ...splitValues(browserUrls)])],
+        feed_urls: splitValues(feedUrls),
+        community_query: communityQuery.trim() || undefined,
+        reddit_query: redditQuery.trim() || undefined,
+        stackoverflow_query: stackoverflowQuery.trim() || undefined,
+        limit: Math.max(1, Math.min(500, Math.round(recordLimit) || 100)),
       },
       interval_seconds: Math.max(1, Math.round(scheduleIntervalMinutes * 60)),
       max_runs: Math.max(1, Math.min(1000, Math.round(scheduleMaxRuns))),
@@ -462,7 +478,15 @@ function App() {
     setActiveSection('workspace')
     jumpTo('workspace')
     try {
-      const started = await startRun(confirmedPlan, runMode)
+      const options: RunOptions = {
+        limit: Math.max(1, Math.min(500, Math.round(recordLimit) || 100)),
+        urls: [...new Set([...confirmedPlan.urls, ...splitValues(browserUrls)])],
+        feed_urls: splitValues(feedUrls),
+        community_query: communityQuery.trim() || undefined,
+        reddit_query: redditQuery.trim() || undefined,
+        stackoverflow_query: stackoverflowQuery.trim() || undefined,
+      }
+      const started = await startRun(confirmedPlan, runMode, options)
       setActiveRunId(started.run.run_id)
       await streamRun(started.run.run_id, (event) => setEvents((current) => [...current, event]))
       const finished = await fetchRun(started.run.run_id)
@@ -726,6 +750,33 @@ function App() {
                   <button className={runMode === 'live' ? 'segment-active' : ''} onClick={() => setRunMode('live')}>Live</button>
                 </div>
               </label>
+              <label>
+                <span>每个来源记录上限</span>
+                <input type="number" min="1" max="500" step="10" value={recordLimit} onChange={(event) => setRecordLimit(Math.max(1, Math.min(500, Number(event.target.value) || 1)))} />
+              </label>
+              <details className="source-config" open>
+                <summary>来源参数（按需填写）</summary>
+                <label>
+                  <span>RSS / Atom feed URL（可多条）</span>
+                  <textarea value={feedUrls} onChange={(event) => setFeedUrls(event.target.value)} placeholder="https://example.com/feed.xml" rows={2} />
+                </label>
+                <label>
+                  <span>Hacker News 查询词</span>
+                  <input value={communityQuery} onChange={(event) => setCommunityQuery(event.target.value)} placeholder="默认使用项目名" />
+                </label>
+                <label>
+                  <span>Reddit 查询词</span>
+                  <input value={redditQuery} onChange={(event) => setRedditQuery(event.target.value)} placeholder="默认使用项目名" />
+                </label>
+                <label>
+                  <span>Stack Overflow 查询词</span>
+                  <input value={stackoverflowQuery} onChange={(event) => setStackoverflowQuery(event.target.value)} placeholder="默认使用项目名" />
+                </label>
+                <label>
+                  <span>Browser Use 页面 URL（可多条）</span>
+                  <textarea value={browserUrls} onChange={(event) => setBrowserUrls(event.target.value)} placeholder="https://github.com/org/repo/issues" rows={2} />
+                </label>
+              </details>
             </div>
           </div>
           {plan && (
@@ -737,7 +788,7 @@ function App() {
                 <span><FolderGit2 size={14} /> {plan.project}</span>
               </div>
               <div className="plan-tags">
-                {(plan.sources.length ? plan.sources : ['github', 'rss', 'hackernews']).map((source) => <button className={selectedSources.includes(source) ? 'source-tag source-tag-active' : 'source-tag'} key={source} onClick={() => toggleSource(source)} aria-pressed={selectedSources.includes(source)}>{sourceName(source)}</button>)}
+                {sourceOptions.map((source) => <button className={selectedSources.includes(source) ? 'source-tag source-tag-active' : 'source-tag'} key={source} onClick={() => toggleSource(source)} aria-pressed={selectedSources.includes(source)}>{sourceName(source)}</button>)}
                 {(plan.focus.length ? plan.focus : focusFallback).map((focus) => <span className="tag-muted" key={focus}>{focus}</span>)}
               </div>
               {plan.urls.length > 0 && <div className="plan-urls"><ArrowUpRight size={13} /> {plan.urls.join(' · ')}</div>}
@@ -919,6 +970,9 @@ function App() {
           <div><span>域名白名单</span><strong>{capabilities.browser_use.allowed_domains.join(', ') || '未配置'}</strong></div>
           <div><span>增量缓存</span><strong>{capabilities.cache_enabled ? '已启用' : '已关闭'}</strong></div>
           <div><span>API 认证</span><strong>{capabilities.api_auth_enabled ? '已启用' : '本地开放'}</strong></div>
+          <div><span>RSS feed</span><strong>{capabilities.source_configuration?.rss_feed_count ?? 0} 条已配置</strong></div>
+          <div><span>Reddit OAuth</span><strong>{capabilities.source_configuration?.reddit_oauth_configured ? '已配置' : '未配置'}</strong></div>
+          <div><span>单来源上限</span><strong>{capabilities.source_configuration?.record_limit_max ?? 500} 条</strong></div>
         </div> : <div className="capability-loading"><LoaderCircle className="spin" size={16} /> 正在读取能力状态</div>}
         <section className="schedule-control" aria-labelledby="schedule-title">
           <div className="schedule-heading"><span id="schedule-title"><Clock3 size={15} /> 定时监控</span><button className="text-action" onClick={refreshSchedule} disabled={scheduleLoading}><RefreshCw size={13} /> 刷新状态</button></div>

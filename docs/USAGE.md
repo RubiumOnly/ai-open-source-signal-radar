@@ -26,7 +26,7 @@ Copy-Item .env.example .env
 
 ## 选择数据来源
 
-CLI 的 `--source` 可重复指定；API 使用 `sources` 数组。自然语言计划通常以 GitHub、RSS、Hacker News 为基础，再依据明确的来源词和页面 URL 增加来源。最终以计划预览为准，可在运行前关闭不需要的来源。
+CLI 的 `--source` 可重复指定；API 使用 `sources` 数组。自然语言计划默认展示 GitHub、RSS、Hacker News、Reddit 和 Stack Overflow，最终以计划预览为准，可在运行前关闭不需要的来源。没有 feed、OAuth 或 Browser Use 配置时，运行会保留 `disabled` / `blocked` / `auth_required` 状态和配置提示，不会把该来源伪装成成功。
 
 | 来源标识 | 说明 |
 | --- | --- |
@@ -36,14 +36,14 @@ CLI 的 `--source` 可重复指定；API 使用 `sources` 数组。自然语言�
 | `github_pr_comments` | 按需 PR review comments，不等同于所有 PR 对话 |
 | `rss` | RSS 2.0 / Atom，指定 feed URL |
 | `hackernews` | Hacker News Algolia；`community` 是其别名 |
-| `reddit` | Reddit 公共 JSON，可能被阻断或限流 |
+| `reddit` | Reddit 公共 JSON；403 时可用只读 OAuth 配置启用 |
 | `stackoverflow` | Stack Exchange API，默认 Stack Overflow 站点 |
 | `browser_use` | 动态浏览器路径，需要额外授权配置 |
 
 ### GitHub 与社区查询
 
 ```sh
-python -m signal_radar --mode live --project browser-use/browser-use --source github --days 30 --limit 20
+python -m signal_radar --mode live --project browser-use/browser-use --source github --days 30 --limit 100
 python -m signal_radar --mode live --project browser-use/browser-use --source github_prs --days 30 --limit 10
 python -m signal_radar --mode live --project browser-use/browser-use --source hackernews --community-query "browser-use" --days 30 --limit 10
 python -m signal_radar --mode live --project browser-use/browser-use --source reddit --reddit-query "browser-use" --days 30 --limit 10
@@ -51,6 +51,20 @@ python -m signal_radar --mode live --project browser-use/browser-use --source st
 ```
 
 这些命令实际访问网络，但不需要模型 Key。API 同样接受 `community_query`、`reddit_query` 和 `stackoverflow_query`。
+
+`--limit` 是每个来源的总记录上限，范围为 1-500。适配器按公开 API 的单页上限分页；最终条数仍受时间窗口、来源配额和可访问性影响。工作台同样提供“每个来源记录上限”输入，默认 100。
+
+### Reddit 访问配置
+
+Reddit 默认尝试公开 JSON。若运行结果为 `blocked / HTTP 403`，可在本机 `.env` 填写 Reddit 只读脚本应用的 OAuth client credentials，服务会自动获取短期 token：
+
+```dotenv
+SIGNAL_RADAR_REDDIT_CLIENT_ID=your-client-id
+SIGNAL_RADAR_REDDIT_CLIENT_SECRET=your-client-secret
+SIGNAL_RADAR_REDDIT_USER_AGENT=signal-radar/0.3 (by /u/your-account)
+```
+
+凭据只用于访问 OAuth API，不会写入报告、能力探针、截图或日志。创建应用仍需遵守 Reddit 的服务条款；凭据无效时会显示 `auth_required`，不会重试或绕过访问策略。
 
 ### RSS / Atom
 
@@ -60,7 +74,7 @@ python -m signal_radar --mode live --project browser-use/browser-use --source st
 python -m signal_radar --mode live --project browser-use/browser-use --source rss --feed-url https://example.com/feed.xml --days 30 --limit 10
 ```
 
-API 可在单次请求中设置 `feed_urls`；工作台使用的默认 feed 来自 `SIGNAL_RADAR_RSS_FEEDS`，多个 URL 用逗号分隔。只读取公开 feed，不需要启动浏览器。失败、超时、无正文和不可访问情况都保留来源状态。
+API 可在单次请求中设置 `feed_urls`；工作台使用的默认 feed 来自 `SIGNAL_RADAR_RSS_FEEDS`，多个 URL 用逗号分隔。只读取公开 feed，不需要启动浏览器。未填写 URL 时显示 `disabled / not_configured`，失败、超时、无正文和不可访问情况也都会保留来源状态。
 
 ### 明确的页面 URL
 
@@ -126,10 +140,10 @@ SIGNAL_RADAR_BROWSER_PROFILE_NAME=Default
 | `SIGNAL_RADAR_CACHE_ENABLED` | `true`，启用本地增量元数据缓存 |
 | `SIGNAL_RADAR_CACHE_DB` | `data/source-cache.sqlite3` |
 | `SIGNAL_RADAR_HISTORY_DB` | `data/runs.sqlite3`，保存运行、报告、事件与标注 |
-| `SIGNAL_RADAR_GITHUB_MAX_PAGES` | 4 页 |
-| `SIGNAL_RADAR_HACKERNEWS_MAX_PAGES` | 4 页 |
-| `SIGNAL_RADAR_REDDIT_MAX_PAGES` | 4 页 |
-| `SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES` | 4 页 |
+| `SIGNAL_RADAR_GITHUB_MAX_PAGES` | 10 页 |
+| `SIGNAL_RADAR_HACKERNEWS_MAX_PAGES` | 10 页 |
+| `SIGNAL_RADAR_REDDIT_MAX_PAGES` | 10 页 |
+| `SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES` | 10 页 |
 | `SIGNAL_RADAR_BROWSER_MAX_STEPS` | 12 步，服务端浏览器上限 |
 | `SIGNAL_RADAR_BROWSER_TIMEOUT_SECONDS` | 180 秒，服务端浏览器预算 |
 
@@ -159,7 +173,7 @@ Invoke-RestMethod http://localhost:8000/api/schedule
 Invoke-RestMethod http://localhost:8000/api/schedule/stop -Method Post
 ```
 
-API 间隔为 1 秒到 24 小时，最多 1000 次运行、4 个来源和各 20 个 URL/feed。支持 GitHub、RSS、Hacker News、Stack Exchange、Browser Use 及受支持别名；**当前调度校验不接受 `reddit` 标识**，它仍可用于即时运行。
+API 间隔为 1 秒到 24 小时，最多 1000 次运行、8 个来源和各 20 个 URL/feed。支持 GitHub、RSS、Hacker News、Reddit、Stack Exchange、Browser Use 及受支持别名。
 
 CLI 示例，最多执行一次且立即运行：
 
@@ -221,7 +235,7 @@ python -m http.server 4173 --directory web
 | `allowlist_missing` / `domain_not_allowed` | 仅将明确授权访问的目标域名加入白名单，不放宽为任意域名 |
 | `auth_required` / Profile 错误 | 检查模型配置；登录态路径需已有绝对目录及明确授权，不自动登录 |
 | HTTP 401 | 请求需本项目 Bearer Token；不是 DeepSeek Key，也不是 GitHub Token |
-| 调度 HTTP 409 / 422 | 已有计划时先停止；检查来源支持范围、最多 4 个来源及数字上限 |
+| 调度 HTTP 409 / 422 | 已有计划时先停止；检查来源支持范围、最多 8 个来源及数字上限 |
 | 报告部分成功 / 限流 | 查看来源状态和 Trace，调整查询范围或重试时间，不推断不可见正文 |
 | Markdown 导出不可用 | 首屏是固定预览，先完成 Replay 或选择带报告的历史运行 |
 

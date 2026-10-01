@@ -1,4 +1,4 @@
-import type { Annotation, AnnotationRequest, CapabilitiesResponse, FollowUpRequest, MetricsResponse, PlanResponse, Report, ResearchPlan, Run, RunEvent, RunResponse, RunMode, ResearchMode, SchedulerRequest, SchedulerState } from '../types'
+import type { Annotation, AnnotationRequest, CapabilitiesResponse, FollowUpRequest, MetricsResponse, PlanResponse, Report, ResearchPlan, Run, RunEvent, RunResponse, RunMode, ResearchMode, RunOptions, SchedulerRequest, SchedulerState } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -27,7 +27,7 @@ export function createPlan(query: string, project: string, mode: ResearchMode): 
   })
 }
 
-export function startRun(plan: ResearchPlan, mode: RunMode): Promise<RunResponse> {
+export function startRun(plan: ResearchPlan, mode: RunMode, options: RunOptions = {}): Promise<RunResponse> {
   return request<RunResponse>('/api/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -39,8 +39,12 @@ export function startRun(plan: ResearchPlan, mode: RunMode): Promise<RunResponse
       research_mode: plan.research_mode,
       focus: plan.focus,
       sources: plan.sources,
-      urls: plan.urls,
-      limit: mode === 'live' ? 20 : 20,
+      urls: options.urls ?? plan.urls,
+      feed_urls: options.feed_urls,
+      community_query: options.community_query,
+      reddit_query: options.reddit_query,
+      stackoverflow_query: options.stackoverflow_query,
+      limit: options.limit ?? 100,
     }),
   })
 }

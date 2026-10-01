@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
+import base64
 import html
 import inspect
 import ipaddress
@@ -160,14 +161,14 @@ class GitHubSourceAdapter:
         *,
         token: str | None = None,
         timeout: float = 8.0,
-        max_limit: int = 50,
-        max_pages: int = 4,
+        max_limit: int = 500,
+        max_pages: int = 10,
         cache: SourceCache | None = None,
         opener: JsonOpener | None = None,
     ) -> None:
         self.token = token or os.getenv("GITHUB_TOKEN")
         self.timeout = max(0.5, float(timeout))
-        self.max_limit = max(1, min(int(max_limit), 100))
+        self.max_limit = max(1, min(int(max_limit), 500))
         self.max_pages = max(1, min(int(max_pages), 20))
         self.cache = cache
         self._opener = opener or urlopen
@@ -261,6 +262,10 @@ class GitHubSourceAdapter:
         cache_prefix: str,
         since: datetime | None = None,
     ) -> tuple[list[dict[str, Any]], int | None, list[str], float, int, bool]:
+        # GitHub accepts at most 100 records per page.  ``limit`` is the
+        # caller's total per-endpoint budget, not a reason to request an
+        # invalid ``per_page=500`` value.
+        page_limit = max(1, min(int(limit), 100))
         items: list[dict[str, Any]] = []
         errors: list[str] = []
         status_codes: list[int] = []
@@ -271,7 +276,7 @@ class GitHubSourceAdapter:
             separator = "&" if "?" in url else "?"
             page_url = f"{url}{separator}page={page}"
             page_items, status_code, error, page_latency, cache_hit = self._request_json(
-                page_url, limit=limit, cache_key=f"{cache_prefix}:page:{page}"
+                page_url, limit=page_limit, cache_key=f"{cache_prefix}:page:{page}"
             )
             pages += 1
             latency += page_latency
@@ -282,7 +287,10 @@ class GitHubSourceAdapter:
                 errors.append(error)
                 break
             items.extend(page_items)
-            if len(page_items) < limit:
+            if len(items) >= limit:
+                items = items[:limit]
+                break
+            if len(page_items) < page_limit:
                 break
             if since and page_items:
                 dates = [_parse_time(item.get("published_at") or item.get("updated_at") or item.get("created_at")) for item in page_items]
@@ -316,14 +324,15 @@ class GitHubSourceAdapter:
         if since and since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
         bounded_limit = max(1, min(int(limit), self.max_limit))
+        page_limit = min(bounded_limit, 100)
         endpoint = f"{self.base_url}/repos/{quote(owner)}/{quote(name)}"
         releases, release_code, release_errors, release_latency, release_pages, release_cache_hit = self._request_pages(
-            f"{endpoint}/releases?per_page={bounded_limit}",
+            f"{endpoint}/releases?per_page={page_limit}",
             limit=bounded_limit,
             cache_prefix=f"github:{owner}/{name}:releases",
             since=since,
         )
-        issue_query = f"state=all&sort=updated&direction=desc&per_page={bounded_limit}"
+        issue_query = f"state=all&sort=updated&direction=desc&per_page={page_limit}"
         if since:
             since_value = since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
             issue_query += f"&since={quote(since_value, safe='')}"
@@ -360,6 +369,8 @@ class GitHubSourceAdapter:
                 claims.append(claim)
                 events.append(event)
         for item in issues:
+            if len(articles) >= bounded_limit:
+                break
             # 端点会把 Pull Request 一并返回；它不是用户反馈，会干扰风险统计。
             if item.get("pull_request"):
                 continue
@@ -421,7 +432,8 @@ class GitHubSourceAdapter:
         if since and since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
         bounded_limit = max(1, min(int(limit), self.max_limit))
-        endpoint = f"{self.base_url}/repos/{quote(owner)}/{quote(name)}/pulls?state=all&sort=updated&direction=desc&per_page={bounded_limit}"
+        page_limit = min(bounded_limit, 100)
+        endpoint = f"{self.base_url}/repos/{quote(owner)}/{quote(name)}/pulls?state=all&sort=updated&direction=desc&per_page={page_limit}"
         items, status_code, errors, latency, pages, cache_hit = self._request_pages(
             endpoint,
             limit=bounded_limit,
@@ -517,7 +529,8 @@ class GitHubSourceAdapter:
         if since and since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
         bounded_limit = max(1, min(int(limit), self.max_limit))
-        endpoint = f"{self.base_url}/repos/{quote(owner)}/{quote(name)}/discussions?per_page={bounded_limit}"
+        page_limit = min(bounded_limit, 100)
+        endpoint = f"{self.base_url}/repos/{quote(owner)}/{quote(name)}/discussions?per_page={page_limit}"
         items, status_code, errors, latency, pages, cache_hit = self._request_pages(
             endpoint,
             limit=bounded_limit,
@@ -616,7 +629,8 @@ class GitHubSourceAdapter:
         if since and since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
         bounded_limit = max(1, min(int(limit), self.max_limit))
-        endpoint = f"{self.base_url}/repos/{quote(owner)}/{quote(name)}/pulls/comments?sort=updated&direction=desc&per_page={bounded_limit}"
+        page_limit = min(bounded_limit, 100)
+        endpoint = f"{self.base_url}/repos/{quote(owner)}/{quote(name)}/pulls/comments?sort=updated&direction=desc&per_page={page_limit}"
         items, status_code, errors, latency, pages, cache_hit = self._request_pages(
             endpoint,
             limit=bounded_limit,
@@ -967,7 +981,7 @@ class RSSSourceAdapter:
         *,
         feed_urls: Iterable[str] | str | None = None,
         timeout: float = 8.0,
-        max_limit: int = 50,
+        max_limit: int = 500,
         max_bytes: int = 2_000_000,
         max_feeds: int = 20,
         cache: SourceCache | None = None,
@@ -978,7 +992,7 @@ class RSSSourceAdapter:
             configured = (configured,)
         self.feed_urls = tuple(str(url).strip() for url in (configured or ()) if str(url).strip())
         self.timeout = max(0.5, float(timeout))
-        self.max_limit = max(1, min(int(max_limit), 200))
+        self.max_limit = max(1, min(int(max_limit), 500))
         self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
         self.max_feeds = max(1, min(int(max_feeds), 50))
         self.cache = cache
@@ -1095,10 +1109,10 @@ class RSSSourceAdapter:
                 status=SourceStatus(
                     source="Official RSS/Atom",
                     source_type="first_party",
-                    status="error",
-                    access_status="error",
-                    detail="No RSS or Atom feed URLs were supplied",
-                    error="no_feeds",
+                    status="disabled",
+                    access_status="not_configured",
+                    detail="No RSS/Atom feed is configured; add a feed URL to enable official updates",
+                    error=None,
                 )
             )
         feed_urls = feed_urls[: self.max_feeds]
@@ -1284,14 +1298,14 @@ class HackerNewsSourceAdapter:
         self,
         *,
         timeout: float = 8.0,
-        max_limit: int = 50,
+        max_limit: int = 500,
         max_bytes: int = 2_000_000,
-        max_pages: int = 4,
+        max_pages: int = 10,
         cache: SourceCache | None = None,
         opener: JsonOpener | None = None,
     ) -> None:
         self.timeout = max(0.5, float(timeout))
-        self.max_limit = max(1, min(int(max_limit), 100))
+        self.max_limit = max(1, min(int(max_limit), 500))
         self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
         self.max_pages = max(1, min(int(max_pages), 20))
         self.cache = cache
@@ -1401,6 +1415,7 @@ class HackerNewsSourceAdapter:
                 )
             )
         bounded_limit = max(1, min(int(limit), self.max_limit))
+        page_limit = min(bounded_limit, 100)
         if isinstance(since, str):
             since = _parse_time(since)
         if since and since.tzinfo is None:
@@ -1413,7 +1428,7 @@ class HackerNewsSourceAdapter:
         cache_hits: list[bool] = []
         for page in range(self.max_pages):
             page_hits, page_status, page_error, page_latency, cache_hit, nb_pages = self._fetch(
-                normalised, limit=bounded_limit, since=since, page=page
+                normalised, limit=page_limit, since=since, page=page
             )
             pages += 1
             latency += page_latency
@@ -1423,7 +1438,7 @@ class HackerNewsSourceAdapter:
             if error:
                 break
             hits.extend(page_hits)
-            if len(page_hits) < bounded_limit or (nb_pages is not None and page + 1 >= nb_pages):
+            if len(page_hits) < page_limit or (nb_pages is not None and page + 1 >= nb_pages):
                 break
             if since and page_hits:
                 dates = [_parse_time(item.get("created_at")) for item in page_hits]
@@ -1571,26 +1586,85 @@ class HackerNewsSourceAdapter:
 
 
 class RedditSourceAdapter:
-    """读取 Reddit 的公开搜索 JSON，不需要登录。"""
+    """读取 Reddit 搜索结果，并在需要时使用显式 OAuth 配置。
+
+    未配置凭据时先走公开 JSON；部分网络环境会对该入口返回 403，此时
+    状态会给出可操作的 OAuth 配置提示，而不是把访问策略误报成代码异常。
+    OAuth 只申请只读 client-credentials token，不读取或提交用户会话。
+    """
 
     base_url = "https://www.reddit.com/search.json"
+    oauth_base_url = "https://oauth.reddit.com/search.json"
+    oauth_token_url = "https://www.reddit.com/api/v1/access_token"
 
     def __init__(
         self,
         *,
         timeout: float = 8.0,
-        max_limit: int = 50,
+        max_limit: int = 500,
         max_bytes: int = 2_000_000,
-        max_pages: int = 4,
+        max_pages: int = 10,
         cache: SourceCache | None = None,
         opener: JsonOpener | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        user_agent: str | None = None,
     ) -> None:
         self.timeout = max(0.5, float(timeout))
-        self.max_limit = max(1, min(int(max_limit), 100))
+        self.max_limit = max(1, min(int(max_limit), 500))
         self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
         self.max_pages = max(1, min(int(max_pages), 20))
         self.cache = cache
         self._opener = opener or urlopen
+        self.client_id = (client_id or os.getenv("SIGNAL_RADAR_REDDIT_CLIENT_ID") or "").strip()
+        self.client_secret = (client_secret or os.getenv("SIGNAL_RADAR_REDDIT_CLIENT_SECRET") or "").strip()
+        self.user_agent = (user_agent or os.getenv("SIGNAL_RADAR_REDDIT_USER_AGENT") or "signal-radar/0.3 (read-only community research)").strip()
+        self._oauth_token: tuple[str, float] | None = None
+
+    @property
+    def oauth_configured(self) -> bool:
+        return bool(self.client_id and self.client_secret)
+
+    def _access_token(self) -> str:
+        """获取短期只读 OAuth token；错误信息不包含 client secret。"""
+
+        if self._oauth_token and self._oauth_token[1] > time.monotonic() + 30:
+            return self._oauth_token[0]
+        credentials = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode("utf-8")).decode("ascii")
+        request = Request(
+            self.oauth_token_url,
+            data=b"grant_type=client_credentials",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Basic {credentials}",
+                "User-Agent": self.user_agent,
+            },
+            method="POST",
+        )
+        try:
+            with self._opener(request, timeout=self.timeout) as response:
+                status_code = getattr(response, "status", None) or response.getcode()
+                try:
+                    raw = response.read(self.max_bytes + 1)
+                except TypeError:
+                    raw = response.read()
+            if status_code is not None and status_code >= 400:
+                raise RuntimeError(f"oauth_http_{status_code}")
+            payload = json.loads(bytes(raw).decode("utf-8"))
+            token = str(payload.get("access_token") or "").strip() if isinstance(payload, dict) else ""
+            if not token:
+                raise RuntimeError("oauth_token_missing")
+            try:
+                expires_in = max(60.0, float(payload.get("expires_in") or 3600.0))
+            except (TypeError, ValueError):
+                expires_in = 3600.0
+            self._oauth_token = (token, time.monotonic() + expires_in)
+            return token
+        except HTTPError as exc:
+            raise RuntimeError(f"oauth_http_{exc.code}") from exc
+        except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"oauth_failed:{exc.__class__.__name__}") from exc
 
     def collect(
         self,
@@ -1612,11 +1686,23 @@ class RedditSourceAdapter:
                 )
             )
         bounded_limit = max(1, min(int(limit), self.max_limit))
+        page_limit = min(bounded_limit, 100)
         if isinstance(since, str):
             since = _parse_time(since)
         if since and since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
         started = time.perf_counter()
+        oauth_token: str | None = None
+        if self.oauth_configured:
+            try:
+                oauth_token = self._access_token()
+            except RuntimeError as exc:
+                return SourceFetchResult(status=SourceStatus(
+                    source="Reddit", source_type="community", status="auth_required", access_status="auth_required",
+                    detail="Reddit OAuth credentials could not be accepted; check client ID, secret and user-agent",
+                    error=str(exc)[:120], latency_ms=_latency(started), pages=0,
+                ))
+        request_base_url = self.oauth_base_url if oauth_token else self.base_url
         children: list[dict[str, Any]] = []
         after: str | None = None
         pages = 0
@@ -1626,15 +1712,16 @@ class RedditSourceAdapter:
                 "q": query,
                 "sort": "new",
                 "t": "all",
-                "limit": bounded_limit,
+                "limit": page_limit,
                 "raw_json": 1,
             }
             if after:
                 query_params["after"] = after
-            request_url = f"{self.base_url}?{urlencode(query_params)}"
+            request_url = f"{request_base_url}?{urlencode(query_params)}"
             base_headers = {
                 "Accept": "application/json",
-                "User-Agent": "signal-radar/0.2 (public community research)",
+                "User-Agent": self.user_agent,
+                **({"Authorization": f"bearer {oauth_token}"} if oauth_token else {}),
             }
             request = Request(
                 request_url,
@@ -1663,9 +1750,12 @@ class RedditSourceAdapter:
                 if status_code is not None and status_code >= 400:
                     status = "rate_limited" if status_code == 429 else "blocked" if status_code == 403 else "error"
                     access = "rate_limited" if status_code == 429 else "blocked" if status_code == 403 else "error"
+                    detail = f"HTTP {status_code}"
+                    if status_code == 403 and not oauth_token:
+                        detail += "; configure SIGNAL_RADAR_REDDIT_CLIENT_ID, SIGNAL_RADAR_REDDIT_CLIENT_SECRET and SIGNAL_RADAR_REDDIT_USER_AGENT to enable OAuth"
                     return SourceFetchResult(status=SourceStatus(
                         source="Reddit", source_type="community", status=status, access_status=access,
-                        detail=f"HTTP {status_code}", error=f"http_{status_code}", latency_ms=_latency(started), pages=pages + 1,
+                        detail=detail, error=f"http_{status_code}", latency_ms=_latency(started), pages=pages + 1,
                     ))
                 if not isinstance(raw, (bytes, bytearray)):
                     raw = str(raw).encode("utf-8", errors="replace")
@@ -1687,12 +1777,20 @@ class RedditSourceAdapter:
                 cache_hits.append(cache_hit)
                 children.extend(item for item in page_children if isinstance(item, dict))
                 after = str(((payload.get("data") or {}).get("after") or "")).strip() if isinstance(payload, dict) else ""
-                if not after or len(page_children) < bounded_limit:
+                if len(children) >= bounded_limit:
+                    children = children[:bounded_limit]
+                    break
+                if not after or len(page_children) < page_limit:
                     break
             except HTTPError as exc:
+                status = "rate_limited" if exc.code == 429 else "blocked" if exc.code == 403 else "error"
+                access = "rate_limited" if exc.code == 429 else "blocked" if exc.code == 403 else "error"
+                detail = f"HTTP {exc.code}"
+                if exc.code == 403 and not oauth_token:
+                    detail += "; configure Reddit OAuth credentials to enable the source"
                 return SourceFetchResult(status=SourceStatus(
-                    source="Reddit", source_type="community", status="error", access_status="error",
-                    detail=f"HTTP {exc.code}", error=f"http_{exc.code}", latency_ms=_latency(started), pages=pages + 1,
+                    source="Reddit", source_type="community", status=status, access_status=access,
+                    detail=detail, error=f"http_{exc.code}", latency_ms=_latency(started), pages=pages + 1,
                 ))
             except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
                 return SourceFetchResult(status=SourceStatus(
@@ -1801,15 +1899,15 @@ class StackOverflowSourceAdapter:
         *,
         site: str = "stackoverflow",
         timeout: float = 8.0,
-        max_limit: int = 50,
-        max_pages: int = 4,
+        max_limit: int = 500,
+        max_pages: int = 10,
         max_bytes: int = 2_000_000,
         cache: SourceCache | None = None,
         opener: JsonOpener | None = None,
     ) -> None:
         self.site = str(site or "stackoverflow").strip().lower()[:40]
         self.timeout = max(0.5, float(timeout))
-        self.max_limit = max(1, min(int(max_limit), 100))
+        self.max_limit = max(1, min(int(max_limit), 500))
         self.max_pages = max(1, min(int(max_pages), 20))
         self.max_bytes = max(1, min(int(max_bytes), 20_000_000))
         self.cache = cache
@@ -1833,7 +1931,7 @@ class StackOverflowSourceAdapter:
             "sort": "activity",
             "site": self.site,
             "q": query,
-            "pagesize": limit,
+            "pagesize": min(int(limit), 100),
             "page": page,
             "filter": "withbody",
         }

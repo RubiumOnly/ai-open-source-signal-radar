@@ -17,6 +17,7 @@ from signal_radar.sources import (
     BrowserUseSourceAdapter,
     GitHubSourceAdapter,
     HackerNewsSourceAdapter,
+    RedditSourceAdapter,
     RSSSourceAdapter,
 )
 
@@ -339,6 +340,44 @@ class SourceAdapterTests(unittest.TestCase):
         )
         self.assertEqual(result.status.status, "ok")
         self.assertEqual(calls, ["https://one.example/feed.xml"])
+
+    def test_rss_without_configuration_is_disabled_not_failed(self) -> None:
+        result = RSSSourceAdapter(opener=lambda *_args, **_kwargs: self.RSS_XML).collect([])
+        self.assertEqual(result.status.status, "disabled")
+        self.assertEqual(result.status.access_status, "not_configured")
+        self.assertIsNone(result.status.error)
+
+    def test_reddit_public_block_explains_oauth_configuration(self) -> None:
+        class BlockedResponse(_Response):
+            status = 403
+
+        result = RedditSourceAdapter(opener=lambda *_args, **_kwargs: BlockedResponse({})).collect("browser-use")
+        self.assertEqual(result.status.status, "blocked")
+        self.assertIn("SIGNAL_RADAR_REDDIT_CLIENT_ID", result.status.detail or "")
+
+    def test_reddit_oauth_uses_read_only_bearer_token(self) -> None:
+        calls = []
+        payloads = [
+            {"access_token": "oauth-token", "expires_in": 3600},
+            {"data": {"children": [{"data": {"id": "abc", "title": "Browser use works", "selftext": "works", "permalink": "/r/test/comments/abc", "created_utc": 1790630400}}], "after": None}},
+        ]
+
+        def opener(request, timeout):
+            calls.append((request.full_url, dict(request.headers), request.get_method()))
+            return _Response(payloads.pop(0))
+
+        result = RedditSourceAdapter(
+            opener=opener,
+            client_id="client",
+            client_secret="secret",
+            user_agent="signal-radar-test",
+        ).collect("browser-use", limit=1)
+        self.assertEqual(result.status.status, "ok")
+        self.assertEqual(result.status.records, 1)
+        self.assertEqual(calls[0][2], "POST")
+        self.assertIn("Basic", calls[0][1].get("Authorization", ""))
+        self.assertEqual(calls[1][0].split("?", 1)[0], "https://oauth.reddit.com/search.json")
+        self.assertEqual(calls[1][1].get("Authorization"), "bearer oauth-token")
 
     def test_browser_use_opt_in_maps_structured_history(self) -> None:
         class FakeHistory:

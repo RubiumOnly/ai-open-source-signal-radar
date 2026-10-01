@@ -247,7 +247,11 @@ class RunRequest(ContractModel):
     project: str | None = None
     repository: str | None = None
     window_days: int = Field(default=7, ge=1, le=3650)
-    limit: int = Field(default=20, ge=1, le=100)
+    # ``limit`` is a per-source cap.  A few dozen records is useful for a
+    # quick check, while Live research should be able to build a meaningful
+    # cross-source sample without silently truncating at the old 100-record
+    # ceiling.
+    limit: int = Field(default=100, ge=1, le=500)
     research_mode: Literal["quick", "standard", "deep"] = "standard"
     focus: list[str] = Field(default_factory=list, max_length=12)
     sources: list[str] = Field(default_factory=lambda: ["github"])

@@ -50,7 +50,7 @@ Token 不应进入 URL、截图或前端构建产物。401 响应包含 `WWW-Aut
 | POST | `/api/run` | 同步执行一次运行 | 是 |
 | GET | `/api/run` | 兼容入口，**会执行运行**，不是只读查询 | 是 |
 
-历史分页默认 20 条，`limit` 范围 1–100。不存在的运行返回 404；没有报告的运行不能导出 Markdown 或发起补查。后台运行优先使用 `POST /api/runs`，不要用同步兼容入口模拟任务排队。
+历史分页默认 20 条，历史列表 `limit` 范围 1–100。不存在的运行返回 404；没有报告的运行不能导出 Markdown 或发起补查。后台运行优先使用 `POST /api/runs`，不要用同步兼容入口模拟任务排队。
 
 ### 调度与标注
 
@@ -110,7 +110,7 @@ Invoke-RestMethod "http://localhost:8000/api/runs/$runId/trace"
 | `project` | 可选 | GitHub `owner/repository`；兼容 `repository` / `subject` |
 | `query` | 可选，最多 4000 字符 | 研究问题 |
 | `window_days` | 7，1–3650 | 采集时间窗口；不同于计划接口默认值 |
-| `limit` | 20，1–100 | 来源采集条数上限，不保证获得足额记录 |
+| `limit` | 100，1–500 | 每个来源的总采集条数上限；适配器按 API 单页上限分页，不保证获得足额记录 |
 | `research_mode` | `standard` | `quick` / `standard` / `deep` |
 | `focus` | 数组，最多 12 项 | 关注主题 |
 | `sources` | `["github"]` | 来源标识，见[使用指南](USAGE.md#选择数据来源) |

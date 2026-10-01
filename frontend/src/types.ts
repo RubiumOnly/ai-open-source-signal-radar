@@ -154,6 +154,11 @@ export interface CapabilitiesResponse {
     max_steps: number
     timeout_seconds: number
   }
+  source_configuration?: {
+    rss_feed_count: number
+    reddit_oauth_configured: boolean
+    record_limit_max: number
+  }
   structured_sources: string[]
 }
 
@@ -187,11 +192,24 @@ export interface SchedulerRequest {
     focus?: string[]
     sources?: string[]
     urls?: string[]
+    feed_urls?: string[]
+    community_query?: string
+    reddit_query?: string
+    stackoverflow_query?: string
     limit?: number
   }
   interval_seconds: number
   max_runs: number
   run_immediately: boolean
+}
+
+export interface RunOptions {
+  limit?: number
+  urls?: string[]
+  feed_urls?: string[]
+  community_query?: string
+  reddit_query?: string
+  stackoverflow_query?: string
 }
 
 export type AnnotationLabel = 'stance' | 'risk' | 'correctness'

@@ -81,7 +81,7 @@ def scheduler_request_from_env() -> SchedulerRequest:
         mode=os.getenv("SIGNAL_RADAR_SCHEDULER_MODE", "replay").strip().lower() or "replay",
         project=os.getenv("SIGNAL_RADAR_SCHEDULER_PROJECT", "browser-use/browser-use"),
         window_days=_env_int("SIGNAL_RADAR_SCHEDULER_WINDOW_DAYS", 7, 1, 3650),
-        limit=_env_int("SIGNAL_RADAR_SCHEDULER_LIMIT", 20, 1, 100),
+        limit=_env_int("SIGNAL_RADAR_SCHEDULER_LIMIT", 100, 1, 500),
         sources=sources[:4],
         urls=urls[:20],
         feed_urls=feed_urls[:20],
@@ -107,8 +107,8 @@ def validate_scheduler_request(config: SchedulerRequest) -> SchedulerRequest:
     unknown = sorted(set(sources) - _ALLOWED_SOURCES)
     if unknown:
         raise ValueError(f"unsupported scheduler source: {', '.join(unknown)}")
-    if len(sources) > 4 or len(request.urls) > 20 or len(request.feed_urls) > 20:
-        raise ValueError("scheduler source and URL lists are bounded at 4 sources and 20 URLs")
+    if len(sources) > 8 or len(request.urls) > 20 or len(request.feed_urls) > 20:
+        raise ValueError("scheduler source and URL lists are bounded at 8 sources and 20 URLs")
     # Browser Use and all built-in adapters are read-only. The scheduler does
     # not accept arbitrary actions, callbacks, or navigation commands.
     bounded_request = request.model_copy(

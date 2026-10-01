@@ -271,7 +271,10 @@ async def _live_report_async(
     if not requested_sources:
         requested_sources = ["github"]
     if "all" in requested_sources:
-        requested_sources = ["github", "rss", "hackernews", "reddit", "stackoverflow", "browser_use"]
+        requested_sources = [
+            "github", "github_prs", "github_discussions", "github_pr_comments",
+            "rss", "hackernews", "reddit", "stackoverflow", "browser_use",
+        ]
     if "media" in requested_sources:
         requested_sources.append("browser_use")
 
@@ -504,7 +507,7 @@ def create_app(
     )
     github_adapter = github_adapter or GitHubSourceAdapter(
         cache=source_cache,
-        max_pages=_env_int("SIGNAL_RADAR_GITHUB_MAX_PAGES", 4, 1, 20),
+        max_pages=_env_int("SIGNAL_RADAR_GITHUB_MAX_PAGES", 10, 1, 20),
     )
     browser_adapter = browser_adapter or BrowserUseSourceAdapter(
         enabled=_env_flag("SIGNAL_RADAR_BROWSER_ENABLED"),
@@ -527,21 +530,24 @@ def create_app(
     )
     hackernews_adapter = hackernews_adapter or HackerNewsSourceAdapter(
         timeout=_env_int("SIGNAL_RADAR_HACKERNEWS_TIMEOUT", 8, 1, 60),
-        max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 50, 1, 100),
-        max_pages=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_PAGES", 4, 1, 20),
+        max_limit=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_LIMIT", 500, 1, 500),
+        max_pages=_env_int("SIGNAL_RADAR_HACKERNEWS_MAX_PAGES", 10, 1, 20),
         cache=source_cache,
     )
     reddit_adapter = reddit_adapter or RedditSourceAdapter(
         timeout=_env_int("SIGNAL_RADAR_REDDIT_TIMEOUT", 8, 1, 60),
-        max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 50, 1, 100),
-        max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 4, 1, 20),
+        max_limit=_env_int("SIGNAL_RADAR_REDDIT_MAX_LIMIT", 500, 1, 500),
+        max_pages=_env_int("SIGNAL_RADAR_REDDIT_MAX_PAGES", 10, 1, 20),
+        client_id=os.getenv("SIGNAL_RADAR_REDDIT_CLIENT_ID"),
+        client_secret=os.getenv("SIGNAL_RADAR_REDDIT_CLIENT_SECRET"),
+        user_agent=os.getenv("SIGNAL_RADAR_REDDIT_USER_AGENT"),
         cache=source_cache,
     )
     stackoverflow_adapter = stackoverflow_adapter or StackOverflowSourceAdapter(
         site=os.getenv("SIGNAL_RADAR_STACKEXCHANGE_SITE", "stackoverflow"),
         timeout=_env_int("SIGNAL_RADAR_STACKEXCHANGE_TIMEOUT", 8, 1, 60),
-        max_limit=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_LIMIT", 50, 1, 100),
-        max_pages=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES", 4, 1, 20),
+        max_limit=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_LIMIT", 500, 1, 500),
+        max_pages=_env_int("SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES", 10, 1, 20),
         cache=source_cache,
     )
     history_store = history_store or HistoryStore(
@@ -668,6 +674,11 @@ def create_app(
                 "allowed_domains": list(browser_adapter.allowed_domains),
                 "max_steps": browser_adapter.max_steps,
                 "timeout_seconds": browser_adapter.timeout_seconds,
+            },
+            "source_configuration": {
+                "rss_feed_count": len(getattr(rss_adapter, "feed_urls", ()) or ()),
+                "reddit_oauth_configured": bool(getattr(reddit_adapter, "oauth_configured", False)),
+                "record_limit_max": 500,
             },
             "structured_sources": ["github", "github_prs", "github_discussions", "github_pr_comments", "rss", "hackernews", "reddit", "stackoverflow"],
         }
