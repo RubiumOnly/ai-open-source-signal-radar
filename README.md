@@ -23,11 +23,36 @@ Signal Radar 汇总 GitHub 版本与开发者反馈、公开技术文章及社�
 
 项目面向本地或受控的单用户环境。GitHub 反馈不等于大众舆情，来源覆盖不等于全网搜索；未采集到的正文不会被补写成事实。
 
-## 工作台预览
+## 真实 Live 运行
 
-![Signal Radar 桌面工作台：研究问题、来源计划与报告概览](docs/images/signal-radar-workbench-desktop.png)
+下面的截图来自 **2026-10-01 的真实 Live API 运行**，不是 fixture 或静态演示：
 
-*当前前端加载 Replay 固定样例的实际浏览器截图，不代表实时采集结果。*
+- 运行 ID：`run-b88f6a708f9c`
+- 项目：`browser-use/browser-use`
+- 时间窗口：30 天
+- 状态：`completed`
+- 来源：GitHub、GitHub Pull Requests、GitHub PR review comments、GitHub Discussions、Stack Overflow
+- 结果：38 条证据、38 个事件、8 个主题、100% 来源覆盖
+- 采集质量：16 页、平均来源延迟约 3206 ms、P95 约 6982 ms、20 条新增、18 条重复
+
+| 来源 | 记录 | 页数 | 延迟 | 增量结果 |
+| --- | ---: | ---: | ---: | --- |
+| GitHub Releases / Issues | 8 | 6 | 6982 ms | 8 条重复，缓存命中 |
+| GitHub Pull Requests | 10 | 4 | 3895 ms | 10 条新增 |
+| GitHub PR review comments | 10 | 4 | 3469 ms | 10 条新增 |
+| GitHub Discussions | 0 | 1 | 839 ms | 公开接口无命中 |
+| Stack Overflow | 10 | 1 | 848 ms | 10 条重复 |
+
+![Signal Radar 真实 Live 工作台首屏](docs/images/signal-radar-workbench-desktop.png)
+
+<details>
+<summary>查看真实 Live 全流程长截图</summary>
+
+![Signal Radar 真实 Live 全流程：运行、历史、风险信号、趋势与证据](docs/images/signal-radar-live-full.png)
+
+</details>
+
+这次运行使用了公开 API 来源；GitHub Discussions 在该时间窗口返回 0 条，因此界面保留了真实的 0 结果。Browser Use 是独立的可选动态路径，本次没有启用它；DeepSeek Key 也不会被误认为参与了这条确定性 API 采集链路。动态页面任务单独启用 Browser Use 后才会调用配置的模型。
 
 ## 核心能力
 
@@ -43,30 +68,39 @@ Signal Radar 汇总 GitHub 版本与开发者反馈、公开技术文章及社�
 
 ## 功能状态
 
-### 当前版本
+GitHub 会将 `[x]` 渲染为绿色完成标记，将 `[ ]` 渲染为空白框。以下清单按产品模块组织，空白项表示规划状态，不代表固定的长期承诺。
+
+### 研究计划与采集
 
 - [x] 自然语言研究计划：解析项目、时间窗口、主题和待确认来源。
-- [x] Replay 工作流：使用固定 fixture 离线运行，不需要模型 Key 或外部采集。
-- [x] Live 工作流：GitHub、RSS/Atom、Hacker News、Reddit、Stack Exchange 等只读来源。
+- [x] 结构化只读来源：GitHub、RSS/Atom、Hacker News、Reddit、Stack Exchange。
 - [x] Browser Use 动态页面：显式开关、域名白名单、步数/时间预算和本地授权 Profile。
-- [x] 结构化运行：后台任务、SSE 事件、来源指标、部分成功和协作式取消。
-- [x] Trace 与历史：SQLite 持久化、历史恢复、Trace 回放和运行筛选。
-- [x] 增量缓存：ETag/Last-Modified、分页、记录指纹和新增/重复统计。
-- [x] 报告导出：持久化运行支持 Markdown/JSON，Replay 预览支持 JSON 快照。
-- [x] 定时监控：有界间隔、最大次数、立即运行、状态轮询和停止。
-- [x] 人工复核：证据正确性、风险等级、立场标注及 JSON 标注集导出。
-- [x] 安全门禁：Prompt Injection fixture、metadata-only 降级和未授权动作检查。
-
-### 规划中
-
-以下项目目前**尚未实现**，仅作为公开路线记录：
-
-- [ ] 服务重启后自动恢复定时计划。
-- [ ] 多用户账号、角色权限和租户级数据隔离。
-- [ ] 分布式任务队列与多 Worker 调度。
-- [ ] Browser Use 常驻 Worker 池和真实站点持续集成测试。
 - [ ] 更多确定性页面适配器及站点级质量基准。
+- [ ] Browser Use 常驻 Worker 池和真实站点持续集成测试。
+
+### 运行与数据
+
+- [x] Replay 工作流：固定 fixture 离线运行，不需要模型 Key 或外部采集。
+- [x] Live 工作流：有界并行、来源状态、部分成功和显式失败。
+- [x] 结构化运行：后台任务、SSE 事件、来源指标和协作式取消。
+- [x] 增量缓存：ETag/Last-Modified、分页、记录指纹和新增/重复统计。
+- [x] Trace 与历史：SQLite 持久化、历史恢复、Trace 回放和运行筛选。
+- [x] 定时监控：有界间隔、最大次数、立即运行、状态轮询和停止。
+- [ ] 服务重启后自动恢复定时计划。
+- [ ] 分布式任务队列与多 Worker 调度。
+
+### 报告与复核
+
+- [x] 报告聚合：风险信号、事件、主题、趋势、证据等级和来源访问状态。
+- [x] 报告导出：持久化运行支持 Markdown/JSON，Replay 预览支持 JSON 快照。
+- [x] 人工复核：证据正确性、风险等级、立场标注及 JSON 标注集导出。
 - [ ] Claims / Events 的完整前端人工复核界面。
+
+### 安全与部署
+
+- [x] Prompt Injection fixture、metadata-only 降级和未授权动作检查。
+- [x] 本地 Bearer Token、域名白名单、只读授权 Profile 和 Docker Replay。
+- [ ] 多用户账号、角色权限和租户级数据隔离。
 
 ### 数据来源
 

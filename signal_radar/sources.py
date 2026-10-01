@@ -220,6 +220,34 @@ class GitHubSourceAdapter:
                 return [], status_code, "GitHub API returned a non-list payload", _latency(started), False
             return payload[:limit], status_code, None, _latency(started), cache_hit
         except HTTPError as exc:
+            if exc.code == 304:
+                # urllib raises HTTP 304 instead of returning a response. The
+                # cache stores validators only, so re-fetch the body without
+                # conditional headers to keep the report snapshot complete.
+                try:
+                    with self._opener(Request(url, headers=base_headers), timeout=self.timeout) as fresh:
+                        status_code = getattr(fresh, "status", None) or fresh.getcode()
+                        raw = fresh.read()
+                        response_headers = getattr(fresh, "headers", None)
+                    if not isinstance(raw, (bytes, bytearray)):
+                        raw = str(raw).encode("utf-8", errors="replace")
+                    if self.cache:
+                        cache_hit = not self.cache.save_response(
+                            cache_key or url,
+                            bytes(raw),
+                            etag=response_headers.get("ETag") if response_headers is not None else None,
+                            last_modified=response_headers.get("Last-Modified") if response_headers is not None else None,
+                        )
+                    else:
+                        cache_hit = False
+                    payload = json.loads(bytes(raw).decode("utf-8"))
+                    if not isinstance(payload, list):
+                        return [], status_code, "GitHub API returned a non-list payload", _latency(started), False
+                    return payload[:limit], status_code, None, _latency(started), cache_hit
+                except HTTPError as fresh_exc:
+                    return [], fresh_exc.code, _error_detail(fresh_exc), _latency(started), False
+                except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as fresh_exc:
+                    return [], None, str(fresh_exc), _latency(started), False
             detail = _error_detail(exc)
             return [], exc.code, detail, _latency(started), False
         except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:

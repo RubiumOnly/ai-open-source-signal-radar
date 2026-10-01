@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import datetime, timezone
+from urllib.error import HTTPError
 
 from signal_radar.cache import SourceCache
 from signal_radar.sources import GitHubSourceAdapter, HackerNewsSourceAdapter, StackOverflowSourceAdapter
@@ -92,6 +93,28 @@ class CacheTests(unittest.TestCase):
         adapter = GitHubSourceAdapter(opener=opener, cache=cache, max_pages=1)
         first = adapter._request_json("https://api.github.com/test", limit=5, cache_key="test")
         second = adapter._request_json("https://api.github.com/test", limit=5, cache_key="test")
+        self.assertEqual(len(first[0]), 1)
+        self.assertEqual(len(second[0]), 1)
+        self.assertTrue(second[4])
+        self.assertEqual(len(calls), 3)
+
+    def test_github_http_error_304_revalidates_body_for_a_complete_snapshot(self) -> None:
+        payload = [{"id": 1, "html_url": "https://github.com/org/repo/releases/1", "tag_name": "v1", "body": "release", "published_at": "2026-09-28T00:00:00Z"}]
+        cache = SourceCache(":memory:")
+        self.addCleanup(cache.close)
+        calls = []
+
+        def opener(request, timeout):
+            calls.append(dict(request.headers))
+            if len(calls) == 1:
+                return _Response(payload, headers={"ETag": '"stable"'})
+            if len(calls) == 2:
+                raise HTTPError(request.full_url, 304, "Not Modified", {}, None)
+            return _Response(payload, headers={"ETag": '"stable"'})
+
+        adapter = GitHubSourceAdapter(opener=opener, cache=cache, max_pages=1)
+        first = adapter._request_json("https://api.github.com/test", limit=5, cache_key="test-http-error")
+        second = adapter._request_json("https://api.github.com/test", limit=5, cache_key="test-http-error")
         self.assertEqual(len(first[0]), 1)
         self.assertEqual(len(second[0]), 1)
         self.assertTrue(second[4])
