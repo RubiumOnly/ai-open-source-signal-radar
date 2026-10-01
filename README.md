@@ -17,7 +17,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-5C8A72" alt="MIT License" /></a>
 </p>
 
-[快速开始](#快速开始) · [使用指南](docs/USAGE.md) · [API 参考](docs/API.md) · [评测](docs/EVALUATION.md) · [更新记录](CHANGELOG.md)
+[快速开始](#快速开始) · [工作台截图](#工作台截图) · [使用指南](docs/USAGE.md) · [API 参考](docs/API.md) · [评测](docs/EVALUATION.md) · [更新记录](CHANGELOG.md)
 
 Signal Radar 汇总 GitHub 版本与开发者反馈、公开技术文章及社区讨论，整理为带原文摘录、来源链接、访问状态和运行轨迹的研究报告。你可以确认采集计划、追查问题、回放历史、复核证据，也可以启动有界的本地定时监控。
 
@@ -46,13 +46,67 @@ Signal Radar 汇总 GitHub 版本与开发者反馈、公开技术文章及社�
 | RSS / Atom | 30 | 2 | 2126 ms | 2 个已配置 Feed，30 条新增 |
 | Stack Overflow | 100 | 1 | 1163 ms | 100 条新增 |
 
-![Signal Radar 最新真实 Live 全流程：480 条证据、RSS/Atom 与 Browser Use](docs/images/signal-radar-live-current-full.jpg)
-
-![Signal Radar 最新 Live 报告中的真实证据记录](docs/images/signal-radar-live-current-evidence.jpg)
-
 本轮 RSS/Atom 实际读取了 [browser-use Releases Atom](https://github.com/browser-use/browser-use/releases.atom) 和 [main 分支提交 Atom](https://github.com/browser-use/browser-use/commits/main.atom)，共采集 30 条。Browser Use 对 Issues、Pull Requests、Discussions 和 Releases 四个公开页面分别运行受限只读任务，合计返回 55 条；其中 10 条带有原文摘录，其余 45 条仅有页面元数据，因此不会伪装成正文证据。Hacker News 查询成功但没有命中。Reddit 按本轮明确要求未请求；其余 8 个已请求来源均完成，覆盖率为 100%。
 
 结构化 API/RSS 来源单项延迟均值约 1797 ms；Browser Use 单独报告四个动态页面任务的来源耗时，不与 API 请求耗时混算。结构化来源不需要模型 Key，Browser Use 才调用配置的 DeepSeek 模型。
+
+## 工作台截图
+
+README 中的截图按一次真实 Live 研究的生命周期组织，覆盖“提出问题 → 确认来源 → 采集 → 分析 → 复核 → 归档 → 监控”七个阶段。除特别说明外，截图均来自本地工作台对 `browser-use/browser-use` 的真实报告；截图中的敏感配置字段保持为空，密钥不会进入图片。
+
+### 1. 提出问题与确认计划
+
+输入自然语言研究问题后，先点击“解析计划”。解析阶段不会访问网络，会展示识别出的项目、时间窗口、研究主题、来源开关、调研深度和“开始研究”确认入口；用户可以在联网前关闭某个来源或补充 RSS、社区查询词和 Browser Use 页面 URL。
+
+![研究入口与来源选择：先解析计划，再确认联网范围](docs/images/signal-radar-research-plan.jpg)
+
+### 2. 采集与来源可观测性
+
+确认计划后，工作台以结构化事件、来源状态、记录数量、页数、延迟、缓存命中和访问边界展示采集过程。本轮运行同时展示 Browser Use、GitHub、GitHub Discussions、Pull Requests、PR review comments、Hacker News、RSS/Atom 和 Stack Overflow 的来源结果。
+
+![真实 Live 运行工作台：来源状态、记录数与采集预算](docs/images/signal-radar-live-current-full.jpg)
+
+![来源覆盖视图：8 个来源的完成状态、记录数与延迟](docs/images/signal-radar-source-coverage.jpg)
+
+### 3. 风险信号与趋势分析
+
+报告生成后，系统将证据聚合为风险信号、主题分布和时间趋势。风险卡片提供风险等级、立场和证据数量；主题趋势同时保留不同来源的主题规模和日期维度，方便区分单条异常与持续性变化。
+
+![风险信号视图：按风险等级查看需要关注的事件](docs/images/signal-radar-risk-signals.jpg)
+
+![主题与趋势视图：主题规模、风险和时间变化](docs/images/signal-radar-topic-trends.jpg)
+
+### 4. 证据回链与人工复核
+
+证据库保留原文链接、摘录、证据等级和元数据降级状态。点击“标注”后，可以分别记录正确性、风险等级或立场，并填写复核者和备注；标注写入独立的本地 SQLite 表，不改写原始报告。报告还支持 JSON、Markdown 和标注集导出。
+
+![证据库：来源链接、原文摘录、证据等级与导出操作](docs/images/signal-radar-live-current-evidence.jpg)
+
+![人工复核：正确性、判断、复核者和备注](docs/images/signal-radar-evidence-review.jpg)
+
+### 5. 历史、Trace 与定时监控
+
+运行历史支持按项目或运行 ID 搜索，并按完成状态筛选；选择历史运行后可以回到报告上下文和 Trace 回放入口，按“全部 / 采集 / 完成”筛选结构化事件。设置抽屉还提供本地 Bearer Token、Browser Use 能力状态、来源参数、缓存和定时监控配置。定时监控可复用当前研究问题与来源，设置间隔、最大次数和是否立即运行，每次结果都会进入历史。
+
+![运行历史：搜索、状态筛选与报告运行记录](docs/images/signal-radar-history.jpg)
+
+![Trace 回放入口：按阶段筛选历史运行事件](docs/images/signal-radar-trace-replay.jpg)
+
+![本地设置与定时监控：认证、来源能力、缓存和调度参数](docs/images/signal-radar-scheduler.jpg)
+
+### 生命周期与功能对照
+
+| 生命周期阶段 | 工作台入口 | 可见能力 |
+| --- | --- | --- |
+| 提出问题 | 总览 / 研究入口 | 自然语言解析、项目识别、时间窗口、研究主题 |
+| 确认范围 | 计划预览 / 来源参数 | 来源开关、RSS/Atom URL、社区查询词、动态页面 URL、调研深度 |
+| 采集 | 采集工作台 / 来源状态 | 有界并行、分页、缓存、延迟、页数、部分成功、取消和访问边界 |
+| 分析 | 风险信号 / 主题趋势 | 风险信号、立场、主题聚合、时间趋势和覆盖率 |
+| 复核 | 证据库 / 标注 | 原文回链、摘录、证据等级、元数据降级、人工标注和导出 |
+| 归档 | 运行历史 / Trace 回放 | 历史搜索、状态筛选、报告恢复、结构化运行事件回放 |
+| 持续监控 | 本地设置 / 定时监控 | Bearer Token、Browser Use 状态、缓存状态、间隔、次数、立即运行和停止 |
+
+截图是界面证据，不替代运行契约。真实数据量、来源状态和访问边界以报告中的运行 ID、来源指标和原文链接为准。
 
 ## 核心能力
 
