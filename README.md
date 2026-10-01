@@ -50,6 +50,8 @@ Signal Radar 汇总 GitHub 版本与开发者反馈、公开技术文章及社�
 
 截图展示的是本地真实 Live 工作台界面；统计表来自本次扩展验证轮次，截图资产保留同一产品流程的可视化证据。
 
+![Signal Radar 真实 Live 数据状态截图](docs/images/signal-radar-live-workbench-real.jpg)
+
 <details>
 <summary>查看真实 Live 全流程长截图</summary>
 
