@@ -973,6 +973,7 @@ function App() {
           <div><span>RSS feed</span><strong>{capabilities.source_configuration?.rss_feed_count ?? 0} 条已配置</strong></div>
           <div><span>Reddit OAuth</span><strong>{capabilities.source_configuration?.reddit_oauth_configured ? '已配置' : '未配置'}</strong></div>
           <div><span>单来源上限</span><strong>{capabilities.source_configuration?.record_limit_max ?? 500} 条</strong></div>
+          <div><span>Browser Use 动态记录上限</span><strong>{capabilities.browser_use.max_records ?? 60} 条</strong></div>
         </div> : <div className="capability-loading"><LoaderCircle className="spin" size={16} /> 正在读取能力状态</div>}
         <section className="schedule-control" aria-labelledby="schedule-title">
           <div className="schedule-heading"><span id="schedule-title"><Clock3 size={15} /> 定时监控</span><button className="text-action" onClick={refreshSchedule} disabled={scheduleLoading}><RefreshCw size={13} /> 刷新状态</button></div>

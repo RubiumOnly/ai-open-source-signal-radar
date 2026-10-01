@@ -11,7 +11,9 @@ import unittest
 from unittest.mock import patch
 
 from datetime import datetime, timezone
+from urllib.error import HTTPError
 
+from signal_radar.cache import SourceCache
 from signal_radar.sources import (
     BrowserRecord,
     BrowserUseSourceAdapter,
@@ -186,6 +188,38 @@ class SourceAdapterTests(unittest.TestCase):
         self.assertEqual(result.articles[0].url, "https://example.com/updates/browser")
         self.assertEqual(result.articles[0].metadata["format"], "atom")
         self.assertEqual(result.claims[0].claim_type, "official_update")
+
+    def test_rss_http_304_retries_without_validators_and_reuses_feed(self) -> None:
+        requests = []
+
+        class FeedResponse(_Response):
+            def __init__(self, payload):
+                super().__init__(payload)
+                self.headers = {"ETag": "feed-v1"}
+
+        def opener(request, timeout):
+            requests.append(request)
+            if request.get_header("If-none-match"):
+                raise HTTPError(request.full_url, 304, "Not Modified", {}, None)
+            return FeedResponse(self.RSS_XML)
+
+        cache = SourceCache(":memory:")
+        adapter = RSSSourceAdapter(
+            feed_urls=["https://blog.example.com/feed.xml"],
+            cache=cache,
+            opener=opener,
+        )
+        initial = adapter.collect(limit=10)
+        repeated = adapter.collect(limit=10)
+
+        self.assertEqual(initial.status.status, "ok")
+        self.assertEqual(repeated.status.status, "ok")
+        self.assertEqual(len(repeated.articles), len(initial.articles))
+        self.assertTrue(repeated.status.cache_hit)
+        self.assertEqual(len(requests), 3)
+        self.assertIsNotNone(requests[1].get_header("If-none-match"))
+        self.assertIsNone(requests[2].get_header("If-none-match"))
+        cache.close()
 
     def test_feed_limit_is_global_and_malformed_xml_is_explicit(self) -> None:
         def opener(request, timeout):
@@ -380,6 +414,13 @@ class SourceAdapterTests(unittest.TestCase):
         self.assertEqual(calls[1][1].get("Authorization"), "bearer oauth-token")
 
     def test_browser_use_opt_in_maps_structured_history(self) -> None:
+        tool_configs = []
+
+        class FakeTools:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                tool_configs.append(kwargs)
+
         class FakeHistory:
             structured_output = {
                 "records": [
@@ -392,6 +433,15 @@ class SourceAdapterTests(unittest.TestCase):
                         "sentiment": "positive",
                         "topics": ["setup"],
                         "confidence": 0.88,
+                        "published_at": "2026-09-30",
+                        "published_at_observed": True,
+                    },
+                    {
+                        "title": "无法确认的讨论",
+                        "url": "https://github.com/org/repo/discussions/999999",
+                        "source": "GitHub Discussions",
+                        "excerpt": "This page was not observed.",
+                        "excerpt_exact": True,
                     }
                 ]
             }
@@ -411,8 +461,18 @@ class SourceAdapterTests(unittest.TestCase):
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
 
+            async def get_pages(self):
+                return [FakePage()]
+
             async def stop(self):
                 return None
+
+        class FakePage:
+            async def get_url(self):
+                return "https://github.com/org/repo/discussions"
+
+            async def evaluate(self, _script):
+                return json.dumps(["https://github.com/org/repo/discussions/1"])
 
         llm_calls = []
 
@@ -424,6 +484,7 @@ class SourceAdapterTests(unittest.TestCase):
             Agent=FakeAgent,
             ChatOpenAI=fake_chat_openai,
             BrowserSession=FakeSession,
+            Tools=FakeTools,
         )
         adapter = BrowserUseSourceAdapter(
             enabled=True,
@@ -438,10 +499,117 @@ class SourceAdapterTests(unittest.TestCase):
         with patch.dict(sys.modules, {"browser_use": fake_module}):
             result = adapter.collect(["https://github.com/org/repo/discussions"])
         self.assertEqual(result.status.status, "ok")
+        self.assertEqual(result.status.records, 1)
         self.assertEqual(result.articles[0].title, "安装体验改善")
+        self.assertIsNone(result.articles[0].published_at)
+        self.assertIn("rejected 1 candidate(s) with unobserved links", result.status.detail or "")
         self.assertEqual(result.claims[0].stance, "support")
         self.assertEqual(llm_calls[0]["base_url"], "https://api.deepseek.com")
         self.assertEqual(llm_calls[0]["model"], "deepseek-chat")
+        self.assertIn("write_file", tool_configs[0]["exclude_actions"])
+        self.assertIn("click", tool_configs[0]["exclude_actions"])
+
+    def test_browser_use_runs_one_bounded_read_only_agent_per_page(self) -> None:
+        calls = []
+        tool_configs = []
+
+        class FakeTools:
+            def __init__(self, **kwargs):
+                tool_configs.append(kwargs)
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                page_url = kwargs["task"].split("URLs:\n", 1)[1].splitlines()[0].removeprefix("- ")
+                kwargs["browser_session"].current_url = page_url
+                kwargs["browser_session"].visible_urls = [f"{page_url}/{index}" for index in range(20)]
+                calls.append((page_url, kwargs["task"], kwargs["tools"]))
+
+            async def run(self, max_steps, on_step_end=None):
+                page_url = self.kwargs["task"].split("URLs:\n", 1)[1].splitlines()[0].removeprefix("- ")
+                self.history = types.SimpleNamespace(
+                    structured_output={
+                        "records": [
+                            {
+                                "title": f"record {index}",
+                                "url": f"{page_url}/{index}",
+                                "source": "GitHub",
+                                "excerpt": "Visible public feedback.",
+                                "excerpt_exact": True,
+                                "sentiment": "neutral",
+                                "confidence": 0.8,
+                            }
+                            for index in range(20)
+                        ]
+                    },
+                    is_done=lambda: False,
+                )
+                if on_step_end:
+                    await on_step_end(self)
+                self.kwargs["browser_session"].visible_urls = []
+                if on_step_end:
+                    self.history.is_done = lambda: True
+                    await on_step_end(self)
+                return self.history
+
+        class FakeSession:
+            def __init__(self, **_kwargs):
+                self.current_url = ""
+                self.visible_urls = []
+
+            async def get_pages(self):
+                return [FakePage(self.current_url, self.visible_urls)]
+
+            async def stop(self):
+                return None
+
+        class FakePage:
+            def __init__(self, current_url, visible_urls):
+                self.current_url = current_url
+                self.visible_urls = visible_urls
+
+            async def get_url(self):
+                return self.current_url
+
+            async def evaluate(self, _script):
+                return json.dumps(self.visible_urls)
+
+        class FakeDeepSeek:
+            def __init__(self, **_kwargs):
+                pass
+
+        adapter = BrowserUseSourceAdapter(
+            enabled=True,
+            run_live=True,
+            deepseek_api_key="test",
+            provider="deepseek",
+            allowed_domains=["github.com"],
+            max_steps=8,
+            max_records=60,
+        )
+        fake_module = types.SimpleNamespace(
+            Agent=FakeAgent,
+            Tools=FakeTools,
+            ChatDeepSeek=FakeDeepSeek,
+            BrowserSession=FakeSession,
+        )
+        urls = [
+            "https://github.com/org/repo/issues",
+            "https://github.com/org/repo/pulls",
+            "https://github.com/org/repo/discussions",
+            "https://github.com/org/repo/releases",
+        ]
+        with patch.dict(sys.modules, {"browser_use": fake_module}):
+            result = adapter.collect(urls, limit=100, max_steps=8, timeout_seconds=30)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual({call[0] for call in calls}, set(urls))
+        self.assertTrue(all("Read-only evidence" in task or "read-only evidence" in task for _, task, _ in calls))
+        self.assertTrue(all(config["output_model"] is not None for config in tool_configs))
+        self.assertTrue(all("write_file" in config["exclude_actions"] for config in tool_configs))
+        self.assertEqual(result.status.records, 60)
+        self.assertEqual(result.status.total_candidates, 80)
+        self.assertNotIn("unobserved links", result.status.detail or "")
+        self.assertEqual(result.status.pages, 4)
 
     def test_deepseek_prefers_browser_use_native_wrapper(self) -> None:
         calls = []

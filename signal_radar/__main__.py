@@ -93,8 +93,9 @@ def _browser_adapter(args: argparse.Namespace) -> BrowserUseSourceAdapter:
         enabled=args.enable_browser_use or _env_flag("SIGNAL_RADAR_BROWSER_ENABLED"),
         run_live=args.browser_run_live or _env_flag("SIGNAL_RADAR_BROWSER_RUN_LIVE"),
         allowed_domains=domains,
-        max_steps=_env_int("SIGNAL_RADAR_BROWSER_MAX_STEPS", 12, 1, 40),
+        max_steps=_env_int("SIGNAL_RADAR_BROWSER_MAX_STEPS", 20, 1, 40),
         timeout_seconds=_env_int("SIGNAL_RADAR_BROWSER_TIMEOUT_SECONDS", 180, 1, 900),
+        max_records=_env_int("SIGNAL_RADAR_BROWSER_MAX_RECORDS", 60, 1, 100),
     )
 
 

@@ -27,39 +27,32 @@ Signal Radar 汇总 GitHub 版本与开发者反馈、公开技术文章及社�
 
 下面的截图来自 **2026-10-01 的真实 Live 运行**，不是 fixture 或静态演示：
 
-- 运行方式：结构化 API + Browser Use 只读动态页面
+- 运行 ID：`run-96052cbeb825`
+- 运行方式：结构化 API + Browser Use 只读动态页面；按用户要求跳过 Reddit
 - 项目：`browser-use/browser-use`
 - 时间窗口：365 天
-- 单来源上限：100 条；Browser Use 动态页面上限受 20 条和步数预算约束
-- 结果：396 条证据、396 个事件、9 个来源、77.8% 来源覆盖
-- 采集质量：10 页、平均来源延迟约 3042 ms、P95 约 15052 ms、395 条新增、0 条重复
+- 结果：480 条证据、480 个事件、8 个已请求来源、100% 来源覆盖
+- 证据等级：435 条完整正文/摘录、45 条仅元数据；480 条新增、0 条重复
+- 采集质量：13 页；结构化来源单项平均延迟约 1797 ms；Browser Use 处理 4 个动态页面，来源耗时约 103083 ms
 
 | 来源 | 记录 | 页数 | 延迟 | 增量结果 |
 | --- | ---: | ---: | ---: | --- |
-| Browser Use 动态页面 | 1 | 1 | 15052 ms | 真实只读页面摘录 |
-| GitHub Releases / Issues | 64 | 2 | 2206 ms | 64 条新增 |
-| GitHub Pull Requests | 100 | 1 | 2246 ms | 100 条新增 |
-| GitHub PR review comments | 100 | 1 | 1330 ms | 100 条新增 |
-| GitHub Discussions | 31 | 1 | 1629 ms | 31 条新增 |
-| Hacker News | 0 | 1 | 619 ms | 公开 API 在窗口内无命中 |
-| RSS / Atom | 0 | 1 | — | 未配置 feed，明确标记 `not_configured` |
-| Reddit | 0 | 1 | 521 ms | 公共 JSON 返回 403，保留 OAuth 配置提示 |
-| Stack Overflow | 100 | 1 | 734 ms | 100 条新增 |
+| Browser Use 动态页面 | 55（10 条原文摘录） | 4 | 103083 ms | 55 条新增，45 条元数据记录 |
+| GitHub Releases / Issues | 64 | 2 | 2817 ms | 64 条新增 |
+| GitHub Pull Requests | 100 | 1 | 2345 ms | 100 条新增 |
+| GitHub PR review comments | 100 | 1 | 1648 ms | 100 条新增 |
+| GitHub Discussions | 31 | 1 | 1767 ms | 31 条新增 |
+| Hacker News | 0 | 1 | 711 ms | 查询成功，时间窗口内无命中 |
+| RSS / Atom | 30 | 2 | 2126 ms | 2 个已配置 Feed，30 条新增 |
+| Stack Overflow | 100 | 1 | 1163 ms | 100 条新增 |
 
-![Signal Radar 真实 Live 工作台首屏](docs/images/signal-radar-workbench-desktop.png)
+![Signal Radar 最新真实 Live 全流程：480 条证据、RSS/Atom 与 Browser Use](docs/images/signal-radar-live-current-full.jpg)
 
-截图展示的是本地真实 Live 工作台界面；统计表来自本次扩展验证轮次，截图资产保留同一产品流程的可视化证据。
+![Signal Radar 最新 Live 报告中的真实证据记录](docs/images/signal-radar-live-current-evidence.jpg)
 
-![Signal Radar 真实 Live 数据状态截图](docs/images/signal-radar-live-workbench-real.jpg)
+本轮 RSS/Atom 实际读取了 [browser-use Releases Atom](https://github.com/browser-use/browser-use/releases.atom) 和 [main 分支提交 Atom](https://github.com/browser-use/browser-use/commits/main.atom)，共采集 30 条。Browser Use 对 Issues、Pull Requests、Discussions 和 Releases 四个公开页面分别运行受限只读任务，合计返回 55 条；其中 10 条带有原文摘录，其余 45 条仅有页面元数据，因此不会伪装成正文证据。Hacker News 查询成功但没有命中。Reddit 按本轮明确要求未请求；其余 8 个已请求来源均完成，覆盖率为 100%。
 
-<details>
-<summary>查看真实 Live 全流程长截图</summary>
-
-![Signal Radar 真实 Live 全流程：运行、历史、风险信号、趋势与证据](docs/images/signal-radar-live-full.png)
-
-</details>
-
-这次运行同时启用了公开 API 与 Browser Use。Browser Use 访问了白名单内的公开 GitHub Issue，返回 1 条可回链摘录；RSS 未配置、Reddit 被访问策略阻断、Hacker News 无命中，都在来源状态中如实保留。结构化来源不需要模型 Key，Browser Use 才调用配置的 DeepSeek 模型。
+结构化 API/RSS 来源单项延迟均值约 1797 ms；Browser Use 单独报告四个动态页面任务的来源耗时，不与 API 请求耗时混算。结构化来源不需要模型 Key，Browser Use 才调用配置的 DeepSeek 模型。
 
 ## 核心能力
 

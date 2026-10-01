@@ -153,6 +153,7 @@ export interface CapabilitiesResponse {
     allowed_domains: string[]
     max_steps: number
     timeout_seconds: number
+    max_records: number
   }
   source_configuration?: {
     rss_feed_count: number

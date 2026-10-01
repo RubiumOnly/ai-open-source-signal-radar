@@ -38,7 +38,7 @@ CLI 的 `--source` 可重复指定；API 使用 `sources` 数组。自然语言�
 | `hackernews` | Hacker News Algolia；`community` 是其别名 |
 | `reddit` | Reddit 公共 JSON；403 时可用只读 OAuth 配置启用 |
 | `stackoverflow` | Stack Exchange API，默认 Stack Overflow 站点 |
-| `browser_use` | 动态浏览器路径，需要额外授权配置 |
+| `browser_use` | Browser Use 对白名单内各公开 URL 启动独立只读任务，再聚合去重；单次默认上限 60 条 |
 
 ### GitHub 与社区查询
 
@@ -94,6 +94,8 @@ python -m pip install -e ".[api,live]"
 
 还需要该 Browser Use 版本支持的 Chromium 环境；浏览器安装与系统依赖参照 [Browser Use 官方文档](https://docs.browser-use.com)。项目当前依赖范围见 [pyproject.toml](../pyproject.toml)，不要把最新上游版本的行为直接当成本项目的兼容承诺。
 
+Browser Use 为每个已允许 URL 创建独立 Agent 任务并行运行，避免多个页面记录挤在单个结构化模型响应中。每页最多收集 20 条，单次默认最多 60 条、最多处理 20 个 URL；来源状态中的 `latency_ms` 为各页面任务耗时合计。对每个页面仍受单次运行总 deadline、步数上限、域名白名单和只读指令约束。
+
 DeepSeek 配置示例，写入未提交的本地 `.env`：
 
 ```dotenv
@@ -104,8 +106,9 @@ DEEPSEEK_MODEL=deepseek-chat
 SIGNAL_RADAR_BROWSER_ENABLED=true
 SIGNAL_RADAR_BROWSER_RUN_LIVE=true
 SIGNAL_RADAR_BROWSER_ALLOWED_DOMAINS=github.com
-SIGNAL_RADAR_BROWSER_MAX_STEPS=12
+SIGNAL_RADAR_BROWSER_MAX_STEPS=20
 SIGNAL_RADAR_BROWSER_TIMEOUT_SECONDS=180
+SIGNAL_RADAR_BROWSER_MAX_RECORDS=60
 ANONYMIZED_TELEMETRY=false
 ```
 
@@ -144,8 +147,9 @@ SIGNAL_RADAR_BROWSER_PROFILE_NAME=Default
 | `SIGNAL_RADAR_HACKERNEWS_MAX_PAGES` | 10 页 |
 | `SIGNAL_RADAR_REDDIT_MAX_PAGES` | 10 页 |
 | `SIGNAL_RADAR_STACKEXCHANGE_MAX_PAGES` | 10 页 |
-| `SIGNAL_RADAR_BROWSER_MAX_STEPS` | 12 步，服务端浏览器上限 |
+| `SIGNAL_RADAR_BROWSER_MAX_STEPS` | 20 步，服务端默认值（最大 40） |
 | `SIGNAL_RADAR_BROWSER_TIMEOUT_SECONDS` | 180 秒，服务端浏览器预算 |
+| `SIGNAL_RADAR_BROWSER_MAX_RECORDS` | 60 条动态记录默认上限（最大 100；每页最多 20 条） |
 
 元数据缓存保存 ETag、Last-Modified、响应摘要和记录指纹，不保存 Cookie 或模型密钥。运行报告中的必要摘录则保存在历史库。重复运行仍保留当前时间窗口的报告快照，不把“没有新增”显示成“没有证据”。缓存命中也不会直接跳过所有后续页。
 

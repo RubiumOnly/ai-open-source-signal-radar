@@ -517,8 +517,9 @@ def create_app(
             for item in os.getenv("SIGNAL_RADAR_BROWSER_ALLOWED_DOMAINS", "").split(",")
             if item.strip()
         ),
-        max_steps=_env_int("SIGNAL_RADAR_BROWSER_MAX_STEPS", 12, 1, 40),
+        max_steps=_env_int("SIGNAL_RADAR_BROWSER_MAX_STEPS", 20, 1, 40),
         timeout_seconds=_env_int("SIGNAL_RADAR_BROWSER_TIMEOUT_SECONDS", 180, 1, 900),
+        max_records=_env_int("SIGNAL_RADAR_BROWSER_MAX_RECORDS", 60, 1, 100),
     )
     rss_adapter = rss_adapter or RSSSourceAdapter(
         feed_urls=tuple(
@@ -674,6 +675,7 @@ def create_app(
                 "allowed_domains": list(browser_adapter.allowed_domains),
                 "max_steps": browser_adapter.max_steps,
                 "timeout_seconds": browser_adapter.timeout_seconds,
+                "max_records": browser_adapter.max_records,
             },
             "source_configuration": {
                 "rss_feed_count": len(getattr(rss_adapter, "feed_urls", ()) or ()),
